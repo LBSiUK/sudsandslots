@@ -22,9 +22,9 @@ struct BookingSheet: View {
                 VStack(spacing: 12) {
                     machine
                     people
+                    days
                     startTime
                     duration
-                    days
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 14)
