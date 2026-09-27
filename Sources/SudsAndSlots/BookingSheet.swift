@@ -9,6 +9,7 @@ struct BookingSheet: View {
     /// over a sheet.
     @StateObject private var confirmer = Confirmer()
     @State private var error: BookingError?
+    @State private var showingTimes = false
 
     private let durations = [30, 60, 90, 120, 150, 180]
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 3)
@@ -94,12 +95,8 @@ struct BookingSheet: View {
     private var startTime: some View {
         VStack(spacing: 6) {
             SectionLabel("Start time")
-            Menu {
-                Picker("Start time", selection: $form.startMinutes) {
-                    ForEach(0..<48) { slot in
-                        Text(BookingForm.label(forMinutes: slot * 30)).tag(slot * 30)
-                    }
-                }
+            Button {
+                showingTimes = true
             } label: {
                 HStack {
                     Text(BookingForm.label(forMinutes: form.startMinutes))
@@ -115,6 +112,10 @@ struct BookingSheet: View {
                 .frame(height: 40)
                 .background(Theme.control, in: Capsule())
                 .overlay(Capsule().stroke(Theme.controlStroke))
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $showingTimes, arrowEdge: .bottom) {
+                TimeSlotList(selection: $form.startMinutes) { showingTimes = false }
             }
         }
     }
@@ -209,4 +210,57 @@ struct BookingSheet: View {
     static let shortDate: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "d MMM"; return f
     }()
+}
+
+/// Every half hour of the day, opened already scrolled so the current time is
+/// the second row (the half hour before it sits above for context). A menu
+/// can't be scrolled like this, hence a popover list.
+struct TimeSlotList: View {
+    @Binding var selection: Int
+    let done: () -> Void
+
+    private var currentSlot: Int {
+        let now = Calendar.current.dateComponents([.hour, .minute], from: Date())
+        return now.hour! * 2 + now.minute! / 30
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            List(0..<48, id: \.self) { slot in
+                Button {
+                    selection = slot * 30
+                    done()
+                } label: {
+                    HStack {
+                        Text(BookingForm.label(forMinutes: slot * 30))
+                            .monospacedDigit()
+                            .foregroundColor(.primary)
+                        if slot == currentSlot {
+                            Text("Now")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        if selection == slot * 30 {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundColor(.accentColor)
+                        }
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .onAppear {
+                // Once the popover has finished sizing itself; scrolling any
+                // earlier lands a few rows off.
+                let target = max(currentSlot - 1, 0)
+                for delay in [0.05, 0.35] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                        proxy.scrollTo(target, anchor: .top)
+                    }
+                }
+            }
+        }
+        .frame(width: 280, height: 380)
+    }
 }

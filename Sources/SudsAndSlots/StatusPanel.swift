@@ -15,20 +15,20 @@ struct StatusPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-                .padding(.bottom, 18)
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 10) {
-                    SectionLabel("Right now")
-                    ForEach(Machine.allCases) { machine in
-                        current(on: machine)
-                    }
-                    SectionLabel("Who's next")
-                        .padding(.top, 12)
-                    whosNext
+                .padding(.bottom, 12)
+            // No scrolling: everything is sized to fit an iPad Mini 4 in
+            // landscape even with both machines in use.
+            VStack(alignment: .leading, spacing: 8) {
+                SectionLabel("Right now")
+                ForEach(Machine.allCases) { machine in
+                    current(on: machine)
                 }
+                SectionLabel("Who's next")
+                    .padding(.top, 6)
+                whosNext
             }
+            Spacer(minLength: 10)
             bookButton
-                .padding(.top, 12)
         }
         .padding(20)
         .onReceive(tick) { now = $0 }
@@ -42,10 +42,10 @@ struct StatusPanel: View {
 
     private var header: some View {
         HStack(spacing: 14) {
-            AppBadge(size: 42)
-            VStack(alignment: .leading, spacing: 2) {
+            AppBadge(size: 38)
+            VStack(alignment: .leading, spacing: 1) {
                 Text("Suds & Slots")
-                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
                 Text("LAUNDRY TRACKER")
                     .font(.system(size: 12, weight: .semibold))
                     .tracking(1.2)
@@ -71,7 +71,7 @@ struct StatusPanel: View {
                                  value: BookingBar.clock(abs(remaining)), warning: remaining < 0)
                     }
                 }
-                .padding(.top, 4)
+                .padding(.top, 2)
                 adjustButton(for: booking)
             }
         } else if let booking = store.due(on: machine, at: now) {
@@ -96,7 +96,7 @@ struct StatusPanel: View {
     private func nameLine(_ booking: Booking) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(booking.person.name)
-                .font(.system(size: 28, weight: .bold, design: .rounded))
+                .font(.system(size: 24, weight: .bold, design: .rounded))
             Text(booking.timeRange)
                 .font(.system(size: 14, weight: .medium))
                 .opacity(0.85)
@@ -122,7 +122,7 @@ struct StatusPanel: View {
             .frame(maxWidth: 104)
             .accessibilityLabel("Extend session")
         }
-        .padding(.top, 8)
+        .padding(.top, 6)
     }
 
     private func cardButtonLabel(_ title: String, systemImage: String) -> some View {
@@ -132,7 +132,7 @@ struct StatusPanel: View {
             .minimumScaleFactor(0.8)
             .foregroundColor(.white)
             .padding(.horizontal, 8)
-            .frame(maxWidth: .infinity, minHeight: 46)
+            .frame(maxWidth: .infinity, minHeight: 40)
             .background(Color.black.opacity(0.3), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white.opacity(0.7)))
     }
@@ -149,48 +149,45 @@ struct StatusPanel: View {
     @ViewBuilder
     private var whosNext: some View {
         let upcoming = Array(store.upcoming(after: now).prefix(2))
-        if let next = upcoming.first {
-            card(color: next.person.color) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(next.person.name)
-                        .font(.system(size: 24, weight: .bold, design: .rounded))
-                    Label(next.machine.name, systemImage: next.machine.systemImage)
-                        .font(.system(size: 15, weight: .semibold))
-                }
-                Text(next.timeRange)
-                    .font(.system(size: 15, weight: .medium))
-                    .opacity(0.9)
-                Text(Calendar.current.isDate(next.start, inSameDayAs: now)
-                     ? "Starts \(Self.until(next.start, from: now))"
-                     : Self.dayName(next.start))
-                    .font(.system(size: 15, weight: .semibold))
-            }
-            ForEach(upcoming.dropFirst()) { booking in
-                HStack(spacing: 10) {
-                    Circle().fill(booking.person.color).frame(width: 12, height: 12)
-                    Text(booking.person.name)
-                        .font(.system(size: 17, weight: .semibold, design: .rounded))
-                    Image(systemName: booking.machine.systemImage)
-                        .font(.system(size: 13))
-                        .foregroundColor(Theme.secondaryText)
-                    Spacer()
-                    Text("\(Self.dayName(booking.start)) \(Booking.timeFormatter.string(from: booking.start))")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundColor(Theme.secondaryText)
-                        .monospacedDigit()
-                }
-                .padding(.horizontal, 14)
-                .frame(height: 42)
-                .background(Theme.control, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            }
-        } else {
+        if upcoming.isEmpty {
             Text("Nobody's booked in yet.")
                 .font(.system(size: 16, weight: .medium))
                 .foregroundColor(Theme.secondaryText)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(16)
-                .background(Theme.control, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .padding(.horizontal, 14)
+                .background(Theme.control, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
+        // The very next one in its person's colour, the one after in grey.
+        ForEach(Array(upcoming.enumerated()), id: \.element.id) { index, booking in
+            HStack(spacing: 8) {
+                Text(booking.person.name)
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                Image(systemName: booking.machine.systemImage)
+                    .font(.system(size: 13, weight: .semibold))
+                    .opacity(0.8)
+                Spacer(minLength: 4)
+                Text(whenText(booking))
+                    .font(.system(size: 14, weight: .semibold))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .opacity(index == 0 ? 1 : 0.7)
+            }
+            .foregroundColor(.white)
+            .padding(.horizontal, 14)
+            .frame(height: 44)
+            .background(index == 0 ? booking.person.color : Theme.control,
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+    }
+
+    /// "9:00 PM · in 25 min" today, "Tomorrow 9:00 AM" otherwise.
+    private func whenText(_ booking: Booking) -> String {
+        let time = Booking.timeFormatter.string(from: booking.start)
+        if Calendar.current.isDate(booking.start, inSameDayAs: now) {
+            return "\(time) · \(Self.until(booking.start, from: now))"
+        }
+        return "\(Self.dayName(booking.start)) \(time)"
     }
 
     // MARK: - Book
@@ -201,12 +198,12 @@ struct StatusPanel: View {
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: "plus")
-                    .font(.system(size: 30, weight: .bold))
+                    .font(.system(size: 28, weight: .bold))
                 Text("Book a Slot")
                     .font(.system(size: 21, weight: .semibold))
             }
             .foregroundColor(.black)
-            .frame(maxWidth: .infinity, minHeight: 64)
+            .frame(maxWidth: .infinity, minHeight: 58)
             .background(Color.white, in: Capsule())
         }
         .buttonStyle(.plain)
@@ -215,12 +212,12 @@ struct StatusPanel: View {
     // MARK: - Pieces
 
     private func card<Content: View>(color: Color, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 2) {
             content()
         }
         .foregroundColor(.white)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
+        .padding(12)
         .background(color, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
@@ -231,19 +228,20 @@ struct StatusPanel: View {
     }
 
     private func timerBox(_ title: String, systemImage: String, value: String, warning: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 0) {
             Label(title.uppercased(), systemImage: systemImage)
-                .font(.system(size: 11, weight: .bold))
+                .font(.system(size: 10, weight: .bold))
                 .opacity(0.85)
             Text(value)
-                .font(.system(size: 28, weight: .bold, design: .rounded))
+                .font(.system(size: 23, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
         }
         .foregroundColor(warning ? .yellow : .white)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
         .background(BookingBar.runningBlue, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white.opacity(0.5)))
     }
