@@ -242,8 +242,14 @@ struct TimeStrip: View {
                 }
             }
             .onAppear {
+                // Again once the sheet has finished presenting; scrolling only
+                // during the animation lands a few chips off.
                 let target = max(currentSlot - 1, 0)
-                DispatchQueue.main.async { proxy.scrollTo(target, anchor: .leading) }
+                for delay in [0.0, 0.35, 0.7] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                        proxy.scrollTo(target, anchor: .leading)
+                    }
+                }
             }
         }
     }
@@ -254,15 +260,18 @@ struct TimeStrip: View {
         return Button {
             selection = minutes
         } label: {
+            // "9:30" on top, "PM" (or "PM · Now") underneath keeps chips narrow.
+            let label = BookingForm.label(forMinutes: minutes)
             VStack(spacing: 0) {
-                Text(BookingForm.label(forMinutes: minutes))
-                    .font(.system(size: 15, weight: .semibold))
+                Text(label.dropLast(3))
+                    .font(.system(size: 16, weight: .semibold))
                     .monospacedDigit()
-                Text(slot == currentSlot && isToday ? "Now" : " ")
+                Text(slot == currentSlot && isToday ? "\(label.suffix(2)) · Now" : String(label.suffix(2)))
                     .font(.system(size: 10, weight: .bold))
                     .opacity(0.75)
             }
-            .padding(.horizontal, 10)
+            .frame(minWidth: 44)
+            .padding(.horizontal, 6)
             .frame(height: 44)
         }
         .buttonStyle(TileButtonStyle(selected: selection == minutes, tint: tint))
