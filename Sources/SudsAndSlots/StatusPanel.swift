@@ -8,6 +8,8 @@ struct StatusPanel: View {
     @EnvironmentObject var form: BookingForm
     @State private var showingBooking = false
     @State private var showingQuickAdd = false
+    @State private var showingServer = false
+    @State private var showingNotifications = false
     /// Refreshed every 15 s for "who's next" and "in 5 min". The per-second
     /// timers tick on their own, so an open menu isn't rebuilt every second.
     @State private var now = Date()
@@ -44,14 +46,41 @@ struct StatusPanel: View {
     private var header: some View {
         HStack(spacing: 14) {
             AppBadge(size: 38)
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text("Suds & Slots")
                     .font(.system(size: 22, weight: .bold, design: .rounded))
-                Text("LAUNDRY TRACKER")
-                    .font(.system(size: 12, weight: .semibold))
-                    .tracking(1.2)
-                    .foregroundColor(Theme.secondaryText)
+                // Sync state doubles as the way into the server settings.
+                Button { showingServer = true } label: { SyncStatusView() }
+                    .buttonStyle(.plain)
+                    .sheet(isPresented: $showingServer) {
+                        ServerSettingsView()
+                            .environmentObject(store)
+                            .preferredColorScheme(.dark)
+                    }
             }
+            Spacer(minLength: 4)
+            if store.syncState != .localOnly {
+                Button { showingNotifications = true } label: {
+                    Image(systemName: "bell.fill")
+                        .font(.system(size: 20))
+                        .foregroundColor(.white)
+                        .frame(width: 44, height: 44)
+                        .background(Color.white.opacity(0.1), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Notifications")
+                .sheet(isPresented: $showingNotifications) {
+                    NotificationsView(person: form.person)
+                        .environmentObject(store)
+                        .preferredColorScheme(.dark)
+                }
+            }
+        }
+        .alert("Couldn't save that", isPresented: Binding(get: { store.syncError != nil },
+                                                          set: { if !$0 { store.syncError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(store.syncError ?? "")
         }
     }
 

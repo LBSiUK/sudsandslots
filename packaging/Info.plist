@@ -64,6 +64,15 @@
         <string>UIInterfaceOrientationPortrait</string>
         <string>UIInterfaceOrientationPortraitUpsideDown</string>
     </array>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Suds &amp; Slots talks to the laundry server on your home network so every iPad shares the same bookings.</string>
     <key>UIApplicationSupportsIndirectInputEvents</key>
     <true/>
 </dict>

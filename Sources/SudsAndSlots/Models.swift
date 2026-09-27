@@ -182,22 +182,106 @@ struct LogSessionMoveNotifier: SessionMoveNotifier {
 }
 
 /// Holds every booking and persists them as JSON in UserDefaults.
+///
+/// With a laundry server configured (Settings, or `-server <url>`) it also
+/// keeps in step with the server through `SyncService`: changes apply here at
+/// once, then go up; the server's answer wins. Without one it's local-only.
 final class BookingStore: ObservableObject {
     @Published private(set) var bookings: [Booking] = []
+    /// localOnly / connecting / synced / offline.
+    @Published private(set) var syncState: SyncState = .localOnly
+    /// The last thing that went wrong talking to the server, worded for people.
+    @Published var syncError: String?
     var moveNotifier: SessionMoveNotifier = LogSessionMoveNotifier()
 
-    private let key = "bookings.v1"
+    /// Set while talking to a server.
+    private(set) var sync: SyncService?
+    private(set) var serverConfig: ServerConfig?
+
+    /// This iPad's own bookings (local-only mode).
+    private let localKey = "bookings.v1"
+    /// Last copy of the server's bookings, so the screen isn't empty at launch.
+    private let serverCacheKey = "bookings.server.v1"
+    private var key: String { sync == nil ? localKey : serverCacheKey }
 
     init() {
-        if let data = UserDefaults.standard.data(forKey: key),
-           let saved = try? JSONDecoder().decode([Booking].self, from: data) {
-            // Drop anything older than a month so the store doesn't grow forever.
-            let cutoff = Date().addingTimeInterval(-30 * 24 * 3600)
-            bookings = saved.filter { $0.end > cutoff }
+        let demo = ProcessInfo.processInfo.arguments.contains("-demo")
+        if !demo, let config = ServerConfig.current {
+            connect(to: config)
+        } else {
+            bookings = load(localKey)
         }
         #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("-demo") { seedDemo() }
+        if demo { seedDemo() }
         #endif
+    }
+
+    private func load(_ key: String) -> [Booking] {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let saved = try? JSONDecoder().decode([Booking].self, from: data) else { return [] }
+        // Drop anything older than a month so the store doesn't grow forever.
+        let cutoff = Date().addingTimeInterval(-30 * 24 * 3600)
+        return saved.filter { $0.end > cutoff }
+    }
+
+    // MARK: Server mode
+
+    /// Starts syncing with a server (the first time, this iPad's own bookings
+    /// are uploaded to it). Pass nil to go back to local-only.
+    func connect(to config: ServerConfig?) {
+        sync?.stop()
+        sync = nil
+        serverConfig = config
+        syncError = nil
+        guard let config = config else {
+            syncState = .localOnly
+            bookings = load(localKey)
+            return
+        }
+        let local = load(localKey)
+        let service = SyncService(config: config, store: self)
+        sync = service
+        bookings = load(serverCacheKey)
+        service.start(localBookings: local)
+    }
+
+    /// Saves the server settings and switches to them (nil disconnects).
+    func useServer(_ config: ServerConfig?) {
+        if let config = config { config.save() } else { ServerConfig.clearSaved() }
+        connect(to: config)
+    }
+
+    /// Fetch everything again now (e.g. a pull to refresh).
+    func refreshFromServer() { sync?.refresh() }
+
+    func setSyncState(_ state: SyncState) {
+        if syncState != state { syncState = state }
+    }
+
+    /// The server's full list replaces ours.
+    func adoptServerBookings(_ list: [Booking]) {
+        guard sync != nil else { return }
+        if list != bookings { bookings = list }
+        save()
+    }
+
+    /// One booking as the server now has it.
+    func adoptServerBooking(_ booking: Booking) {
+        guard sync != nil else { return }
+        if let i = bookings.firstIndex(where: { $0.id == booking.id }) {
+            if bookings[i] != booking { bookings[i] = booking }
+        } else {
+            bookings.append(booking)
+        }
+        save()
+    }
+
+    /// Swaps bookings made optimistically for the server's copies (new ids).
+    func replaceOptimistic(_ ids: [UUID], with made: [Booking]) {
+        guard sync != nil else { return }
+        bookings.removeAll { ids.contains($0.id) || made.map(\.id).contains($0.id) }
+        bookings += made
+        save()
     }
 
     #if DEBUG
@@ -276,8 +360,8 @@ final class BookingStore: ObservableObject {
     }
 
     func book(_ person: Person?, machine: Machine, start: Date, minutes: Int) throws {
-        bookings.append(try check(person, machine: machine, start: start, minutes: minutes))
-        save()
+        // A one-stage chain: same checks, and it syncs.
+        try bookChain(person, start: start, stages: [(machine, minutes)])
     }
 
     /// One booking per chosen machine, run back to back: the washer starts at
@@ -294,18 +378,83 @@ final class BookingStore: ObservableObject {
     }
 
     func bookChain(_ person: Person?, start: Date, stages: [(Machine, Int)]) throws {
-        bookings += try checkChain(person, start: start, stages: stages)
+        let chain = try checkChain(person, start: start, stages: stages)
+        bookings += chain
         save()
+        if let person = person {
+            sync?.bookChain(person: person, start: start, stages: stages, push: false, optimistic: chain)
+        }
+    }
+
+    /// Dry run of a chain that may shove other people's bookings along
+    /// (Quick add): which not-yet-started bookings would move. Stages go back
+    /// to back as in `checkChain`; on each stage's machine, overlapping
+    /// bookings are pushed, in start order, to begin when the one before them
+    /// now ends, keeping their length. Overlapping a started (or finished)
+    /// booking is still a clash.
+    func pushPlan(_ person: Person?, start: Date, stages: [(Machine, Int)]) throws -> [SessionMove] {
+        try placePushing(person, start: start, stages: stages).moves
+    }
+
+    /// `push: false` is plain `bookChain`; `push: true` shoves bookings along
+    /// as `pushPlan` describes, and their people are told.
+    func bookChain(_ person: Person?, start: Date, stages: [(Machine, Int)], push: Bool) throws {
+        guard push, let person = person else {
+            try bookChain(person, start: start, stages: stages)
+            return
+        }
+        let (chain, moves) = try placePushing(person, start: start, stages: stages)
+        for move in moves {
+            update(move.booking) { $0.start = move.newStart }
+        }
+        bookings += chain
+        save()
+        if let sync = sync {
+            // The server notifies the people who were moved.
+            sync.bookChain(person: person, start: start, stages: stages, push: true, optimistic: chain)
+        } else if !moves.isEmpty, let first = chain.first {
+            moveNotifier.sessionsMoved(moves, by: first)
+        }
+    }
+
+    private func placePushing(_ person: Person?, start: Date, stages: [(Machine, Int)]) throws
+        -> (bookings: [Booking], moves: [SessionMove]) {
+        guard !stages.isEmpty else { throw BookingError.nothingChosen }
+        guard let person = person else { throw BookingError.noPerson }
+        var at = start
+        var chain: [Booking] = []
+        var moves: [SessionMove] = []
+        for (machine, minutes) in stages {
+            let stage = Booking(person: person, start: at, minutes: minutes, machine: machine)
+            guard stage.end > Date() else { throw BookingError.inPast }
+            at = stage.end
+            chain.append(stage)
+            var end = stage.end
+            let others = bookings
+                .filter { $0.machine == machine && $0.end > stage.start }
+                .sorted { $0.start < $1.start }
+            for other in others {
+                guard other.start < end else { break }
+                if other.startedAt != nil || other.finishedAt != nil { throw BookingError.clash(other) }
+                let move = SessionMove(booking: other, newStart: end)
+                moves.append(move)
+                end = move.newEnd
+            }
+        }
+        return (chain, moves)
     }
 
     /// `at` can be in the past (up to 4 hours) when logging a load late.
     func start(_ booking: Booking, at date: Date = Date()) {
         let earliest = Date().addingTimeInterval(-Booking.maxBackdate)
-        update(booking) { $0.startedAt = max(date, earliest); $0.finishedAt = nil }
+        let at = max(date, earliest)
+        update(booking) { $0.startedAt = at; $0.finishedAt = nil }
+        sync?.start(booking, at: at)
     }
 
     func finish(_ booking: Booking) {
         update(booking) { $0.finishedAt = Date() }
+        sync?.finish(booking)
     }
 
     /// Which later bookings on the same machine would have to move if this
@@ -332,6 +481,8 @@ final class BookingStore: ObservableObject {
         for move in moves {
             update(move.booking) { $0.start = move.newStart }
         }
+        // A server tells the people whose sessions moved itself.
+        if let sync = sync { sync.extend(booking, by: minutes); return }
         guard let extended = bookings.first(where: { $0.id == booking.id }) else { return }
         if !moves.isEmpty { moveNotifier.sessionsMoved(moves, by: extended) }
     }
@@ -345,6 +496,7 @@ final class BookingStore: ObservableObject {
     func remove(_ booking: Booking) {
         bookings.removeAll { $0.id == booking.id }
         save()
+        sync?.remove(booking)
     }
 
     private func save() {
