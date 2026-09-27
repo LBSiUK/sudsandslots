@@ -55,7 +55,7 @@ struct ContentView: View {
             // Side by side when there's room (landscape iPad); stacked otherwise.
             if geo.size.width >= 820 {
                 HStack(spacing: 16) {
-                    SidebarView()
+                    StatusPanel()
                         .frame(width: min(max(geo.size.width * 0.34, 340), 420))
                         .panel()
                     CalendarView()
@@ -64,7 +64,7 @@ struct ContentView: View {
                 .padding(16)
             } else {
                 VStack(spacing: 16) {
-                    SidebarView()
+                    StatusPanel()
                         .frame(height: geo.size.height * 0.5)
                         .panel()
                     CalendarView()

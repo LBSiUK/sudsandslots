@@ -125,19 +125,6 @@ struct TimelineGrid: View {
         }
     }
 
-    private func perform(_ pending: PendingBarAction) {
-        switch pending.action {
-        case .start:
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            store.start(pending.booking)
-        case .finish:
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
-            store.finish(pending.booking)
-        case .cancel:
-            withAnimation { store.remove(pending.booking) }
-        }
-    }
-
     /// Invisible markers one per hour, sitting a little above each hour line so
     /// scrolling to them leaves room for the hour label.
     private var scrollAnchors: some View {
@@ -216,9 +203,7 @@ struct TimelineGrid: View {
         let height = min(max(bottom - top - 3, Self.minBarHeight), max(nextTop - top - 3, 16))
 
         return BookingBar(booking: booking, width: width, height: height) { action in
-            let pending = PendingBarAction(action: action, booking: booking)
-            confirmer.ask(pending.question, detail: pending.detail, confirmTitle: pending.buttonTitle,
-                          destructive: action == .cancel) { perform(pending) }
+            confirmer.ask(PendingBarAction(action: action, booking: booking), store: store)
         }
         .offset(x: labelWidth + 10, y: top + 1.5)
         .transition(.opacity.combined(with: .scale(scale: 0.95)))

@@ -1,9 +1,13 @@
 import SwiftUI
 
-struct SidebarView: View {
+/// The booking form, shown as a sheet from the big + button.
+struct BookingSheet: View {
     @EnvironmentObject var store: BookingStore
     @EnvironmentObject var form: BookingForm
-    @EnvironmentObject var confirmer: Confirmer
+    @Environment(\.dismiss) private var dismiss
+    /// The sheet's own, because iOS 15 can't show the main screen's alert
+    /// over a sheet.
+    @StateObject private var confirmer = Confirmer()
     @State private var error: BookingError?
 
     private let durations = [30, 60, 90, 120, 150, 180]
@@ -12,42 +16,35 @@ struct SidebarView: View {
     private var tint: Color { form.person?.color ?? Color.white.opacity(0.25) }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Everything scrolls if the screen is short, but Book stays pinned.
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 11) {
-                    header
+        NavigationView {
+            ScrollView {
+                VStack(spacing: 12) {
                     people
                     startTime
                     duration
                     days
                 }
-                .padding([.horizontal, .top], 20)
-                .padding(.bottom, 10)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
+                .alert("Can't book that slot", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text(error?.errorDescription ?? "")
+                }
             }
-            bookButton
-                .padding([.horizontal, .bottom], 20)
-        }
-        .alert("Can't book that slot", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(error?.errorDescription ?? "")
-        }
-    }
-
-    private var header: some View {
-        HStack(spacing: 14) {
-            AppBadge(size: 42)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Suds & Slots")
-                    .font(.system(size: 24, weight: .bold, design: .rounded))
-                Text("LAUNDRY TRACKER")
-                    .font(.system(size: 12, weight: .semibold))
-                    .tracking(1.2)
-                    .foregroundColor(Theme.secondaryText)
+            .navigationTitle("Book a Slot")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Book", action: book)
+                }
             }
-            Spacer()
         }
+        .navigationViewStyle(.stack)
+        .confirmationAlert(confirmer)
     }
 
     private var people: some View {
@@ -61,7 +58,7 @@ struct SidebarView: View {
                     Text(person.name)
                         .font(.system(size: 19, weight: .bold, design: .rounded))
                         .foregroundColor(.white)
-                        .frame(maxWidth: .infinity, minHeight: 33)
+                        .frame(maxWidth: .infinity, minHeight: 38)
                         .overlay(alignment: .trailing) {
                             if selected {
                                 Image(systemName: "checkmark.circle.fill")
@@ -151,30 +148,22 @@ struct SidebarView: View {
         }
     }
 
-    private var bookButton: some View {
-        Button {
-            do {
-                let booking = try store.check(form.person, start: form.startDate, minutes: form.durationMinutes)
-                confirmer.ask("book \(booking.person.name) in",
-                              detail: "\(Self.longDay.string(from: booking.start)), \(booking.timeRange)",
-                              confirmTitle: "Book") { confirmBooking(booking) }
-            } catch let e as BookingError {
-                showError(e)
-            } catch {}
-        } label: {
-            Label("Book Slot", systemImage: "plus")
-                .font(.system(size: 19, weight: .semibold))
-                .foregroundColor(.black)
-                .frame(maxWidth: .infinity, minHeight: 46)
-                .background(Color.white, in: Capsule())
-        }
-        .buttonStyle(.plain)
+    private func book() {
+        do {
+            let booking = try store.check(form.person, start: form.startDate, minutes: form.durationMinutes)
+            confirmer.ask("book \(booking.person.name) in",
+                          detail: "\(Self.longDay.string(from: booking.start)), \(booking.timeRange)",
+                          confirmTitle: "Book") { confirmBooking(booking) }
+        } catch let e as BookingError {
+            showError(e)
+        } catch {}
     }
 
     private func confirmBooking(_ booking: Booking) {
         do {
             try store.book(booking.person, start: booking.start, minutes: booking.minutes)
             UINotificationFeedbackGenerator().notificationOccurred(.success)
+            dismiss()
         } catch let e as BookingError {
             showError(e)
         } catch {}

@@ -32,6 +32,13 @@ struct Booking: Codable, Identifiable, Equatable {
 
     var end: Date { start.addingTimeInterval(TimeInterval(minutes * 60)) }
 
+    var isRunning: Bool { startedAt != nil && finishedAt == nil }
+
+    /// Only today's bookings that haven't ended yet can be started.
+    var canStart: Bool {
+        startedAt == nil && Calendar.current.isDateInToday(start) && Date() < end
+    }
+
     func overlaps(start otherStart: Date, end otherEnd: Date) -> Bool {
         start < otherEnd && otherStart < end
     }
@@ -118,6 +125,21 @@ final class BookingStore: ObservableObject {
         return bookings
             .filter { $0.overlaps(start: start, end: end) }
             .sorted { $0.start < $1.start }
+    }
+
+    /// The load that's been started and not finished yet.
+    var running: Booking? {
+        bookings.filter(\.isRunning).max { $0.startedAt! < $1.startedAt! }
+    }
+
+    /// A booking whose slot is happening now but hasn't been started.
+    func due(at now: Date = Date()) -> Booking? {
+        bookings.first { $0.startedAt == nil && $0.start <= now && now < $0.end }
+    }
+
+    /// Bookings still to come, soonest first.
+    func upcoming(after now: Date = Date()) -> [Booking] {
+        bookings.filter { $0.startedAt == nil && $0.start > now }.sorted { $0.start < $1.start }
     }
 
     /// The booking that would be made, or the reason it can't be.

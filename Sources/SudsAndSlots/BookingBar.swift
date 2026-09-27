@@ -38,7 +38,26 @@ struct PendingBarAction {
 }
 
 /// One booking on the timeline:
-/// [Start | running timers + Finished | Done] [Cancel] Name ……… time range
+/// [In use | Done] [Cancel] Name ……… time range
+extension Confirmer {
+    /// Ask "Are you sure…" for a Start / Finish / Cancel tap, then do it.
+    func ask(_ pending: PendingBarAction, store: BookingStore) {
+        ask(pending.question, detail: pending.detail, confirmTitle: pending.buttonTitle,
+            destructive: pending.action == .cancel) {
+            switch pending.action {
+            case .start:
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                store.start(pending.booking)
+            case .finish:
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                store.finish(pending.booking)
+            case .cancel:
+                withAnimation { store.remove(pending.booking) }
+            }
+        }
+    }
+}
+
 struct BookingBar: View {
     let booking: Booking
     let width: CGFloat
@@ -51,19 +70,14 @@ struct BookingBar: View {
     private var controlHeight: CGFloat { compact ? max(height - 4, 12) : min(height - 10, 32) }
     private var controlFont: Font { .system(size: compact ? 11 : 14, weight: .semibold) }
 
-    /// Only today's bookings that haven't ended yet can be started.
-    private var canStart: Bool {
-        booking.startedAt == nil && Calendar.current.isDateInToday(booking.start) && Date() < booking.end
-    }
-
     var body: some View {
         HStack(spacing: compact ? 6 : 8) {
+            // Start / Finished and the timers live in the left panel's
+            // Current wash card; the bar just shows the state.
             if booking.finishedAt != nil {
                 doneBadge
-            } else if booking.startedAt != nil {
-                runningTimers
-            } else if canStart {
-                pill("Start", systemImage: "play.fill", color: Self.startGreen) { onAction(.start) }
+            } else if booking.isRunning {
+                inUseBadge
             }
             if booking.finishedAt == nil {
                 pill("Cancel", systemImage: "xmark", color: Color.black.opacity(0.3)) { onAction(.cancel) }
@@ -89,23 +103,16 @@ struct BookingBar: View {
 
     // MARK: - Pieces
 
-    private var runningTimers: some View {
-        TimelineView(.periodic(from: Date(), by: 1)) { context in
-            let elapsed = context.date.timeIntervalSince(booking.startedAt ?? context.date)
-            let remaining = TimeInterval(booking.minutes * 60) - elapsed
-            HStack(spacing: compact ? 5 : 8) {
-                timer(systemImage: "stopwatch", value: Self.clock(elapsed))
-                timer(systemImage: "hourglass",
-                      value: remaining >= 0 ? Self.clock(remaining) : "+" + Self.clock(-remaining))
-                    .foregroundColor(remaining >= 0 ? .white : Color.yellow)
-                pill("Finished", systemImage: "stop.fill", color: Self.finishRed) { onAction(.finish) }
-            }
-            .padding(.leading, compact ? 6 : 10)
-            .padding(.trailing, compact ? 2 : 3)
-            .frame(height: compact ? controlHeight : controlHeight + 6)
-            .background(Self.runningBlue, in: Capsule())
-            .overlay(Capsule().stroke(Color.white.opacity(0.7), lineWidth: 1))
+    private var inUseBadge: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "stopwatch")
+            if !compact { Text("In use") }
         }
+        .font(controlFont)
+        .padding(.horizontal, compact ? 6 : 10)
+        .frame(height: controlHeight)
+        .background(Self.runningBlue, in: Capsule())
+        .overlay(Capsule().stroke(Color.white.opacity(0.7), lineWidth: 1))
     }
 
     private var doneBadge: some View {
@@ -119,18 +126,6 @@ struct BookingBar: View {
         .padding(.horizontal, compact ? 6 : 10)
         .frame(height: controlHeight)
         .background(Color.black.opacity(0.3), in: Capsule())
-    }
-
-    private func timer(systemImage: String, value: String) -> some View {
-        HStack(spacing: 3) {
-            Image(systemName: systemImage)
-                .font(.system(size: compact ? 10 : 13, weight: .semibold))
-            Text(value)
-                .font(.system(size: compact ? 12 : 15, weight: .semibold))
-                .monospacedDigit()
-        }
-        .lineLimit(1)
-        .fixedSize()
     }
 
     private func pill(_ title: String, systemImage: String, color: Color,
