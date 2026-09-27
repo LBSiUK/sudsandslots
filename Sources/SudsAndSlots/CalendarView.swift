@@ -101,21 +101,22 @@ struct TimelineGrid: View {
         }
     }
 
-    /// Where the washer and dryer columns sit, given the grid's full width.
+    /// Where each machine's column sits, given the grid's full width.
     private struct Columns {
         let x: CGFloat, width: CGFloat, gap: CGFloat
+        let count = CGFloat(Machine.allCases.count)
 
         init(totalWidth: CGFloat, leading: CGFloat) {
             gap = 8
             x = leading
-            width = (totalWidth - leading - 28 - gap) / 2
+            width = (totalWidth - leading - 28 - gap * (count - 1)) / count
         }
 
         func x(for machine: Machine) -> CGFloat {
-            machine == .washer ? x : x + width + gap
+            x + CGFloat(Machine.allCases.firstIndex(of: machine)!) * (width + gap)
         }
 
-        var all: CGFloat { width * 2 + gap }
+        var all: CGFloat { width * count + gap * (count - 1) }
     }
 
     private func columns(for width: CGFloat) -> Columns {
@@ -128,6 +129,8 @@ struct TimelineGrid: View {
             ForEach(Machine.allCases) { machine in
                 Label(machine.name, systemImage: machine.systemImage)
                     .font(.system(size: 15, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
                     .foregroundColor(Theme.secondaryText)
                     .frame(width: cols.width, height: 34)
                     .offset(x: cols.x(for: machine))
@@ -146,11 +149,13 @@ struct TimelineGrid: View {
                         gridLines
                         GeometryReader { geo in
                             let cols = columns(for: geo.size.width)
-                            // Faint rule between the washer and dryer columns.
-                            Rectangle()
-                                .fill(Theme.panelStroke)
-                                .frame(width: 1, height: geo.size.height)
-                                .offset(x: cols.x + cols.width + cols.gap / 2)
+                            // Faint rules between the machine columns.
+                            ForEach(Machine.allCases.dropFirst()) { machine in
+                                Rectangle()
+                                    .fill(Theme.panelStroke)
+                                    .frame(width: 1, height: geo.size.height)
+                                    .offset(x: cols.x(for: machine) - cols.gap / 2)
+                            }
                             // Drawn before the bars so they sit on top of it.
                             nowLine(width: cols.all)
                             ForEach(bookings) { booking in

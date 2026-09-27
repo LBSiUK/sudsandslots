@@ -58,7 +58,9 @@ struct StatusPanel: View {
 
     @ViewBuilder
     private func current(on machine: Machine) -> some View {
-        if let booking = store.running(on: machine) {
+        if machine == .rack, let booking = store.running(on: machine) ?? store.due(on: machine, at: now) {
+            slimCard(booking, state: booking.isRunning ? "in use" : "their turn")
+        } else if let booking = store.running(on: machine) {
             card(color: booking.person.color) {
                 caption("\(machine.name) · in use", systemImage: machine.systemImage)
                 nameLine(booking)
@@ -89,6 +91,35 @@ struct StatusPanel: View {
                 Text(freeUntil(on: machine))
                     .font(.system(size: 15, weight: .medium))
                     .foregroundColor(Theme.secondaryText)
+            }
+        }
+    }
+
+    /// One-row card for the drying rack: its sessions are long and need no
+    /// live timers, so just who, until when, and the session menu.
+    private func slimCard(_ booking: Booking, state: String) -> some View {
+        card(color: booking.person.color) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    caption("\(booking.machine.name) · \(state)", systemImage: booking.machine.systemImage)
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(booking.person.name)
+                            .font(.system(size: 20, weight: .bold, design: .rounded))
+                        Text("until \(Booking.timeFormatter.string(from: booking.end))")
+                            .font(.system(size: 14, weight: .medium))
+                            .opacity(0.85)
+                    }
+                }
+                Spacer(minLength: 4)
+                Menu {
+                    SessionMenuItems(booking: booking)
+                } label: {
+                    Image(systemName: "ellipsis.circle.fill")
+                        .font(.system(size: 30))
+                        .foregroundColor(.white)
+                        .frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("Adjust this session")
             }
         }
     }

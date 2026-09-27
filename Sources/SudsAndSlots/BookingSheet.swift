@@ -9,10 +9,7 @@ struct BookingSheet: View {
     /// over a sheet.
     @StateObject private var confirmer = Confirmer()
     @State private var error: BookingError?
-    @State private var showingTimes = false
 
-    private let durations = [30, 60, 90, 120, 150, 180]
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 3)
 
     private var tint: Color { form.person?.color ?? Color.white.opacity(0.25) }
 
@@ -20,11 +17,10 @@ struct BookingSheet: View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 12) {
-                    machine
                     people
                     days
                     startTime
-                    duration
+                    usage
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 14)
@@ -47,24 +43,70 @@ struct BookingSheet: View {
         }
         .navigationViewStyle(.stack)
         .confirmationAlert(confirmer)
+        .onAppear(perform: form.resetUsage)
     }
 
-    private var machine: some View {
+    /// The three yes/no questions, each with a time estimate when it's a yes.
+    private var usage: some View {
         VStack(spacing: 6) {
-            SectionLabel("Which machine?")
-            Picker("Machine", selection: $form.machine) {
+            SectionLabel("What are you using?")
+            VStack(spacing: 0) {
                 ForEach(Machine.allCases) { machine in
-                    Label(machine.name, systemImage: machine.systemImage).tag(machine)
+                    if machine != Machine.allCases.first {
+                        Divider().overlay(Theme.controlStroke)
+                    }
+                    usageRow(machine)
                 }
             }
-            .pickerStyle(.segmented)
+            .padding(.horizontal, 14)
+            .background(Theme.control, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.controlStroke))
+        }
+    }
+
+    private func usageRow(_ machine: Machine) -> some View {
+        let using = Binding(get: { form.uses[machine] ?? false }, set: { form.uses[machine] = $0 })
+        let minutes = Binding(get: { form.minutes[machine] ?? machine.defaultMinutes },
+                              set: { form.minutes[machine] = $0 })
+        return VStack(spacing: 4) {
+            HStack(spacing: 10) {
+                Image(systemName: machine.systemImage)
+                    .frame(width: 20)
+                    .foregroundColor(using.wrappedValue ? .white : Theme.secondaryText)
+                Text(machine.question)
+                    .font(.system(size: 16, weight: .medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                Spacer(minLength: 8)
+                Picker(machine.question, selection: using) {
+                    Text("No").tag(false)
+                    Text("Yes").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 110)
+            }
+            .frame(minHeight: 40)
+            if using.wrappedValue {
+                Stepper(value: minutes, in: 15...machine.maxMinutes, step: 15) {
+                    HStack {
+                        Text("Estimated time")
+                            .foregroundColor(Theme.secondaryText)
+                        Spacer()
+                        Text(extendLabel(minutes.wrappedValue))
+                            .font(.system(size: 16, weight: .semibold))
+                            .monospacedDigit()
+                    }
+                }
+                .padding(.leading, 30)
+                .padding(.bottom, 6)
+            }
         }
     }
 
     private var people: some View {
         VStack(spacing: 6) {
             SectionLabel("Who's it for?")
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 2), spacing: 8) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
                 ForEach(Person.allCases) { person in
                     let selected = form.person == person
                     Button {
@@ -92,59 +134,19 @@ struct BookingSheet: View {
         }
     }
 
+    /// A row of half-hour chips (one tap to pick), opened scrolled so the
+    /// current half hour is the second chip.
     private var startTime: some View {
         VStack(spacing: 6) {
             SectionLabel("Start time")
-            Button {
-                showingTimes = true
-            } label: {
-                HStack {
-                    Text(BookingForm.label(forMinutes: form.startMinutes))
-                        .font(.system(size: 20, weight: .medium))
-                        .monospacedDigit()
-                    Spacer()
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 15, weight: .semibold))
-                }
-                .foregroundColor(.white)
-                .padding(.horizontal, 16)
-                .frame(height: 40)
-                // In the chosen person's colour, like the selected day and
-                // duration, so it stands out as something to check.
-                .background(form.person?.color ?? Theme.control, in: Capsule())
-                .overlay(Capsule().stroke(form.person == nil ? Theme.controlStroke : Color.white.opacity(0.9),
-                                          lineWidth: form.person == nil ? 1 : 2))
-            }
-            .buttonStyle(.plain)
-            .popover(isPresented: $showingTimes, arrowEdge: .bottom) {
-                TimeSlotList(selection: $form.startMinutes) { showingTimes = false }
-            }
-        }
-    }
-
-    private var duration: some View {
-        VStack(spacing: 6) {
-            SectionLabel("Duration")
-            LazyVGrid(columns: columns, spacing: 8) {
-                ForEach(durations, id: \.self) { minutes in
-                    Button {
-                        form.durationMinutes = minutes
-                    } label: {
-                        Text(String(format: "%d:%02d", minutes / 60, minutes % 60))
-                            .font(.system(size: 18, weight: .semibold))
-                            .monospacedDigit()
-                            .frame(height: 36)
-                    }
-                    .buttonStyle(TileButtonStyle(selected: form.durationMinutes == minutes, tint: tint))
-                }
-            }
+            TimeStrip(selection: $form.startMinutes, isToday: form.dayOffset == 0, tint: tint)
         }
     }
 
     private var days: some View {
         VStack(spacing: 6) {
             SectionLabel("Which day?")
-            LazyVGrid(columns: columns, spacing: 8) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 6), spacing: 8) {
                 ForEach(0..<6) { offset in
                     let date = Calendar.current.date(byAdding: .day, value: offset,
                                                      to: Calendar.current.startOfDay(for: Date()))!
@@ -153,7 +155,9 @@ struct BookingSheet: View {
                     } label: {
                         VStack(spacing: 1) {
                             Text(Self.dayTitle(offset: offset, date: date))
-                                .font(.system(size: 16, weight: .bold))
+                                .font(.system(size: 15, weight: .bold))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
                             Text(Self.shortDate.string(from: date))
                                 .font(.system(size: 12))
                                 .foregroundColor(Color.white.opacity(0.7))
@@ -168,19 +172,19 @@ struct BookingSheet: View {
 
     private func book() {
         do {
-            let booking = try store.check(form.person, machine: form.machine,
-                                          start: form.startDate, minutes: form.durationMinutes)
-            confirmer.ask("book \(booking.person.name) on the \(booking.machine.name.lowercased())",
-                          detail: "\(Self.longDay.string(from: booking.start)), \(booking.timeRange)",
-                          confirmTitle: "Book") { confirmBooking(booking) }
+            let chain = try store.checkChain(form.person, start: form.startDate, stages: form.stages)
+            let lines = chain.map { "\($0.machine.name): \($0.timeRange)" }
+            confirmer.ask("book \(chain[0].person.name) in",
+                          detail: ([Self.longDay.string(from: chain[0].start)] + lines).joined(separator: "\n"),
+                          confirmTitle: "Book") { confirmBooking() }
         } catch let e as BookingError {
             showError(e)
         } catch {}
     }
 
-    private func confirmBooking(_ booking: Booking) {
+    private func confirmBooking() {
         do {
-            try store.book(booking.person, machine: booking.machine, start: booking.start, minutes: booking.minutes)
+            try store.bookChain(form.person, start: form.startDate, stages: form.stages)
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             dismiss()
         } catch let e as BookingError {
@@ -214,12 +218,14 @@ struct BookingSheet: View {
     }()
 }
 
-/// Every half hour of the day, opened already scrolled so the current time is
-/// the second row (the half hour before it sits above for context). A menu
-/// can't be scrolled like this, hence a popover list.
-struct TimeSlotList: View {
+/// Every half hour of the day as a horizontal row of chips. Opens scrolled so
+/// the current half hour is the second chip (the one before it sits first for
+/// context), so nobody has to scroll from midnight. Earlier times today are
+/// dimmed.
+struct TimeStrip: View {
     @Binding var selection: Int
-    let done: () -> Void
+    let isToday: Bool
+    let tint: Color
 
     private var currentSlot: Int {
         let now = Calendar.current.dateComponents([.hour, .minute], from: Date())
@@ -228,41 +234,40 @@ struct TimeSlotList: View {
 
     var body: some View {
         ScrollViewReader { proxy in
-            List(0..<48, id: \.self) { slot in
-                Button {
-                    selection = slot * 30
-                    done()
-                } label: {
-                    HStack {
-                        Text(BookingForm.label(forMinutes: slot * 30))
-                            .monospacedDigit()
-                            .foregroundColor(.primary)
-                        if slot == currentSlot {
-                            Text("Now")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundColor(.secondary)
-                        }
-                        Spacer()
-                        if selection == slot * 30 {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundColor(.accentColor)
-                        }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(0..<48, id: \.self) { slot in
+                        chip(slot)
                     }
                 }
             }
-            .listStyle(.plain)
             .onAppear {
-                // Once the popover has finished sizing itself; scrolling any
-                // earlier lands a few rows off.
                 let target = max(currentSlot - 1, 0)
-                for delay in [0.05, 0.35] {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                        proxy.scrollTo(target, anchor: .top)
-                    }
-                }
+                DispatchQueue.main.async { proxy.scrollTo(target, anchor: .leading) }
             }
         }
-        .frame(width: 280, height: 380)
+    }
+
+    private func chip(_ slot: Int) -> some View {
+        let minutes = slot * 30
+        let past = isToday && slot < currentSlot
+        return Button {
+            selection = minutes
+        } label: {
+            VStack(spacing: 0) {
+                Text(BookingForm.label(forMinutes: minutes))
+                    .font(.system(size: 15, weight: .semibold))
+                    .monospacedDigit()
+                Text(slot == currentSlot && isToday ? "Now" : " ")
+                    .font(.system(size: 10, weight: .bold))
+                    .opacity(0.75)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 44)
+        }
+        .buttonStyle(TileButtonStyle(selected: selection == minutes, tint: tint))
+        .fixedSize()
+        .opacity(past ? 0.4 : 1)
+        .id(slot)
     }
 }

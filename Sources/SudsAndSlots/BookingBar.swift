@@ -172,7 +172,8 @@ struct BookingBar: View {
                     Text(booking.person.name)
                         .font(.system(size: compact ? 14 : 17, weight: .bold, design: .rounded))
                         .layoutPriority(1)
-                    if !twoLine {
+                    // A one-line bar in a narrow column only has room for the name.
+                    if !twoLine && width >= 240 {
                         timeText
                     }
                 }
@@ -215,11 +216,11 @@ struct BookingBar: View {
     }
 
     private var timeText: some View {
-        Text(booking.timeRange)
-            .font(.system(size: compact ? 11 : 13, weight: .medium))
+        Text(width < 240 ? booking.shortTimeRange : booking.timeRange)
+            .font(.system(size: compact ? 11 : width < 240 ? 12 : 13, weight: .medium))
             .monospacedDigit()
             .opacity(0.9)
-            .minimumScaleFactor(0.8)
+            .minimumScaleFactor(0.7)
     }
 
     /// In use = stopwatch on blue, done = tick; nothing for a session that hasn't begun.

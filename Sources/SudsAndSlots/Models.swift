@@ -20,12 +20,48 @@ enum Person: String, CaseIterable, Codable, Identifiable {
     }
 }
 
+/// Something that can be booked. Order here is the calendar's column order
+/// and the order a booking's stages run in.
 enum Machine: String, CaseIterable, Codable, Identifiable {
-    case washer, dryer
+    case washer, dryer, rack
 
     var id: String { rawValue }
-    var name: String { rawValue.capitalized }
-    var systemImage: String { self == .washer ? "drop.fill" : "wind" }
+
+    var name: String {
+        switch self {
+        case .washer: return "Washer"
+        case .dryer: return "Dryer"
+        case .rack: return "Drying rack"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .washer: return "drop.fill"
+        case .dryer: return "wind"
+        case .rack: return "tshirt"
+        }
+    }
+
+    /// The booking form's yes/no question.
+    var question: String {
+        switch self {
+        case .washer: return "Are you using the washing machine?"
+        case .dryer: return "Are you using the dryer?"
+        case .rack: return "Are you using the drying rack?"
+        }
+    }
+
+    var defaultMinutes: Int {
+        switch self {
+        case .washer: return 120
+        case .dryer: return 90
+        case .rack: return 360
+        }
+    }
+
+    /// Longest estimate the form allows.
+    var maxMinutes: Int { self == .rack ? 24 * 60 : 6 * 60 }
 }
 
 struct Booking: Codable, Identifiable, Equatable {
@@ -64,6 +100,14 @@ struct Booking: Codable, Identifiable, Equatable {
         "\(Booking.timeFormatter.string(from: start)) – \(Booking.timeFormatter.string(from: end))"
     }
 
+    /// "8:00 – 9:30 AM", or "11:30 AM – 1:00 PM" across noon: for narrow spaces.
+    var shortTimeRange: String {
+        let f = Booking.timeFormatter
+        let startText = f.string(from: start), endText = f.string(from: end)
+        let sameHalf = startText.suffix(2) == endText.suffix(2)
+        return sameHalf ? "\(startText.dropLast(3)) – \(endText)" : "\(startText) – \(endText)"
+    }
+
     static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "h:mm a"
@@ -94,12 +138,14 @@ extension Booking {
 
 enum BookingError: LocalizedError {
     case noPerson
+    case nothingChosen
     case inPast
     case clash(Booking)
 
     var errorDescription: String? {
         switch self {
         case .noPerson: return "Pick who's washing first."
+        case .nothingChosen: return "Say yes to at least one of the washing machine, dryer or drying rack."
         case .inPast:   return "That start time has already passed."
         case .clash(let b): return "That clashes with \(b.person.name)'s \(b.machine.name.lowercased()) slot (\(b.timeRange))."
         }
@@ -172,6 +218,8 @@ final class BookingStore: ObservableObject {
             Booking(person: .izzy, start: at(9, 30), minutes: 60, machine: .dryer),
             Booking(person: .sophie, start: at(14, 30), minutes: 90, machine: .dryer),
             Booking(person: .ruby, start: at(10, day: 1), minutes: 60, machine: .dryer),
+            Booking(person: .izzy, start: at(10, 30), minutes: 360, machine: .rack),
+            Booking(person: .sophie, start: at(16), minutes: 360, machine: .rack),
         ]
         // Show every bar state: Izzy's load is done, and Leon has one running
         // now (clearing any sample booking it would overlap).
@@ -229,6 +277,24 @@ final class BookingStore: ObservableObject {
 
     func book(_ person: Person?, machine: Machine, start: Date, minutes: Int) throws {
         bookings.append(try check(person, machine: machine, start: start, minutes: minutes))
+        save()
+    }
+
+    /// One booking per chosen machine, run back to back: the washer starts at
+    /// `start`, the dryer when the washer ends, the rack when the one before
+    /// it ends. Checks every stage before adding any, so it's all or nothing.
+    func checkChain(_ person: Person?, start: Date, stages: [(Machine, Int)]) throws -> [Booking] {
+        guard !stages.isEmpty else { throw BookingError.nothingChosen }
+        var at = start
+        return try stages.map { machine, minutes in
+            let booking = try check(person, machine: machine, start: at, minutes: minutes)
+            at = booking.end
+            return booking
+        }
+    }
+
+    func bookChain(_ person: Person?, start: Date, stages: [(Machine, Int)]) throws {
+        bookings += try checkChain(person, start: start, stages: stages)
         save()
     }
 
@@ -296,8 +362,20 @@ final class BookingForm: ObservableObject {
     }
     /// Minutes after midnight, in 30-minute steps.
     @Published var startMinutes: Int
-    @Published var durationMinutes = 60
-    @Published var machine: Machine = .washer
+    /// The form's yes/no answers and time estimates, per machine.
+    @Published var uses: [Machine: Bool] = [.washer: true, .dryer: false, .rack: false]
+    @Published var minutes: [Machine: Int] = Dictionary(uniqueKeysWithValues: Machine.allCases.map { ($0, $0.defaultMinutes) })
+
+    /// Back to yes for the washer, no for the rest, and the default estimates.
+    func resetUsage() {
+        uses = [.washer: true, .dryer: false, .rack: false]
+        minutes = Dictionary(uniqueKeysWithValues: Machine.allCases.map { ($0, $0.defaultMinutes) })
+    }
+
+    /// The chosen machines in the order they run, with their estimates.
+    var stages: [(Machine, Int)] {
+        Machine.allCases.filter { uses[$0] == true }.map { ($0, minutes[$0] ?? $0.defaultMinutes) }
+    }
     /// Days from today of the day being viewed and booked.
     @Published var dayOffset = 0
 
