@@ -105,13 +105,15 @@ struct BookingSheet: View {
                     Spacer()
                     Image(systemName: "chevron.down")
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(Theme.secondaryText)
                 }
                 .foregroundColor(.white)
                 .padding(.horizontal, 16)
                 .frame(height: 40)
-                .background(Theme.control, in: Capsule())
-                .overlay(Capsule().stroke(Theme.controlStroke))
+                // In the chosen person's colour, like the selected day and
+                // duration, so it stands out as something to check.
+                .background(form.person?.color ?? Theme.control, in: Capsule())
+                .overlay(Capsule().stroke(form.person == nil ? Theme.controlStroke : Color.white.opacity(0.9),
+                                          lineWidth: form.person == nil ? 1 : 2))
             }
             .buttonStyle(.plain)
             .popover(isPresented: $showingTimes, arrowEdge: .bottom) {
