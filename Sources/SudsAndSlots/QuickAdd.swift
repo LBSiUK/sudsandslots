@@ -91,11 +91,18 @@ struct QuickAddSheet: View {
         let current = stages.isEmpty ? Outcome.free : outcome(at: start)
         let busy: Bool = { if case .free = current { return false }; return true }()
         let suggestion = busy || offset == nil ? nextFree : nil
+        // The clash banner sits above everything, title bar included, and
+        // pushes the whole sheet down rather than covering any of it.
+        VStack(spacing: 0) {
+        if let blocker = blocker(at: base) {
+            nowBanner(blocker)
+                .padding([.horizontal, .top], 14)
+                .padding(.bottom, 4)
+                .transition(.move(edge: .top).combined(with: .opacity))
+        }
         NavigationView {
+            ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if let blocker = blocker(at: base) {
-                    nowBanner(blocker)
-                }
                 section("When?") {
                     HStack(spacing: 8) {
                         ForEach(offsets, id: \.self) { minutes in
@@ -142,9 +149,9 @@ struct QuickAddSheet: View {
                         }
                     }
                 }
-                Spacer(minLength: 0)
             }
             .padding(20)
+            }
             .navigationTitle("Quick Add")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -159,6 +166,9 @@ struct QuickAddSheet: View {
             }
         }
         .navigationViewStyle(.stack)
+        }
+        .animation(.easeOut(duration: 0.2), value: blocker(at: base)?.id)
+        .background(Color(.systemBackground).ignoresSafeArea())
         .confirmationAlert(confirmer)
         .onChange(of: offset) { _ in dryLater = false }
         .onChange(of: uses) { _ in dryLater = false }
