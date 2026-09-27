@@ -89,6 +89,7 @@ struct BookingBar: View {
 
     /// Short bars (30-minute slots) get a smaller type size.
     private var compact: Bool { height < 30 }
+    private var isDone: Bool { booking.finishedAt != nil }
     /// Tall enough to put the time range on its own line.
     private var twoLine: Bool { height >= 48 }
 
@@ -123,12 +124,23 @@ struct BookingBar: View {
                 .font(.system(size: compact ? 16 : 20))
                 .opacity(0.9)
         }
-        .foregroundColor(.white)
+        .foregroundColor(.white.opacity(isDone ? 0.55 : 1))
         .padding(.horizontal, compact ? 8 : 10)
         .frame(width: width, height: height)
-        .background(booking.person.color, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.white.opacity(0.25)))
-        .shadow(color: .black.opacity(0.3), radius: 6, y: 3)
+        .background(isDone ? Self.doneGrey : booking.person.color,
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        // A finished session keeps a thin stripe of its person's colour.
+        .overlay(alignment: .leading) {
+            if isDone {
+                booking.person.color.opacity(0.6)
+                    .frame(width: 4)
+                    .padding(.vertical, 6)
+                    .clipShape(Capsule())
+                    .padding(.leading, 3)
+            }
+        }
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.white.opacity(isDone ? 0.12 : 0.25)))
+        .shadow(color: .black.opacity(isDone ? 0 : 0.3), radius: 6, y: 3)
         .contentShape(Rectangle())
     }
 
@@ -163,6 +175,7 @@ struct BookingBar: View {
     static let startGreen = Color(red: 0.13, green: 0.72, blue: 0.30)
     static let finishRed = Color(red: 0.90, green: 0.18, blue: 0.18)
     static let runningBlue = Color(red: 0.05, green: 0.32, blue: 0.90)
+    static let doneGrey = Color(white: 0.24)
 
     /// 5:07 under an hour, 1:05:07 over.
     static func clock(_ interval: TimeInterval) -> String {
