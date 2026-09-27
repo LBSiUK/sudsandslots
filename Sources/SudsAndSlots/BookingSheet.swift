@@ -19,6 +19,7 @@ struct BookingSheet: View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 12) {
+                    machine
                     people
                     startTime
                     duration
@@ -47,31 +48,45 @@ struct BookingSheet: View {
         .confirmationAlert(confirmer)
     }
 
+    private var machine: some View {
+        VStack(spacing: 6) {
+            SectionLabel("Which machine?")
+            Picker("Machine", selection: $form.machine) {
+                ForEach(Machine.allCases) { machine in
+                    Label(machine.name, systemImage: machine.systemImage).tag(machine)
+                }
+            }
+            .pickerStyle(.segmented)
+        }
+    }
+
     private var people: some View {
         VStack(spacing: 6) {
-            SectionLabel("Who's washing?")
-            ForEach(Person.allCases) { person in
-                let selected = form.person == person
-                Button {
-                    form.person = person
-                } label: {
-                    Text(person.name)
-                        .font(.system(size: 19, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity, minHeight: 38)
-                        .overlay(alignment: .trailing) {
-                            if selected {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 20))
-                                    .padding(.trailing, 12)
+            SectionLabel("Who's it for?")
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 2), spacing: 8) {
+                ForEach(Person.allCases) { person in
+                    let selected = form.person == person
+                    Button {
+                        form.person = person
+                    } label: {
+                        Text(person.name)
+                            .font(.system(size: 19, weight: .bold, design: .rounded))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .overlay(alignment: .trailing) {
+                                if selected {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.system(size: 20))
+                                        .padding(.trailing, 12)
+                                }
                             }
-                        }
-                        .background(person.color, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(Color.white, lineWidth: selected ? 3 : 0))
-                        .opacity(form.person == nil || selected ? 1 : 0.55)
+                            .background(person.color, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(Color.white, lineWidth: selected ? 3 : 0))
+                            .opacity(form.person == nil || selected ? 1 : 0.55)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         }
     }
@@ -150,8 +165,9 @@ struct BookingSheet: View {
 
     private func book() {
         do {
-            let booking = try store.check(form.person, start: form.startDate, minutes: form.durationMinutes)
-            confirmer.ask("book \(booking.person.name) in",
+            let booking = try store.check(form.person, machine: form.machine,
+                                          start: form.startDate, minutes: form.durationMinutes)
+            confirmer.ask("book \(booking.person.name) on the \(booking.machine.name.lowercased())",
                           detail: "\(Self.longDay.string(from: booking.start)), \(booking.timeRange)",
                           confirmTitle: "Book") { confirmBooking(booking) }
         } catch let e as BookingError {
@@ -161,7 +177,7 @@ struct BookingSheet: View {
 
     private func confirmBooking(_ booking: Booking) {
         do {
-            try store.book(booking.person, start: booking.start, minutes: booking.minutes)
+            try store.book(booking.person, machine: booking.machine, start: booking.start, minutes: booking.minutes)
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             dismiss()
         } catch let e as BookingError {

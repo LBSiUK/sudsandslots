@@ -1,33 +1,37 @@
+import Combine
 import SwiftUI
 
-/// Left panel: what's washing now (with its controls), who's next, and the
-/// big + that opens the booking form.
+/// Left panel: what's on each machine now (with its Adjust menu), who's next,
+/// and the big + that opens the booking form.
 struct StatusPanel: View {
     @EnvironmentObject var store: BookingStore
     @EnvironmentObject var form: BookingForm
-    @EnvironmentObject var confirmer: Confirmer
     @State private var showingBooking = false
+    /// Refreshed every 15 s for "who's next" and "in 5 min". The per-second
+    /// timers tick on their own, so an open menu isn't rebuilt every second.
+    @State private var now = Date()
+    private let tick = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
                 .padding(.bottom, 18)
-            // Ticks every second so timers, "in 5 min" and who's-next stay current.
-            TimelineView(.periodic(from: Date(), by: 1)) { context in
-                ScrollView(showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        SectionLabel("Current wash")
-                        currentWash(now: context.date)
-                        SectionLabel("Who's next")
-                            .padding(.top, 12)
-                        whosNext(now: context.date)
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 10) {
+                    SectionLabel("Right now")
+                    ForEach(Machine.allCases) { machine in
+                        current(on: machine)
                     }
+                    SectionLabel("Who's next")
+                        .padding(.top, 12)
+                    whosNext
                 }
             }
             bookButton
                 .padding(.top, 12)
         }
         .padding(20)
+        .onReceive(tick) { now = $0 }
         .sheet(isPresented: $showingBooking) {
             BookingSheet()
                 .environmentObject(store)
@@ -50,89 +54,108 @@ struct StatusPanel: View {
         }
     }
 
-    // MARK: - Current wash
+    // MARK: - Right now
 
     @ViewBuilder
-    private func currentWash(now: Date) -> some View {
-        if let booking = store.running {
-            let elapsed = now.timeIntervalSince(booking.startedAt ?? now)
-            let remaining = TimeInterval(booking.minutes * 60) - elapsed
+    private func current(on machine: Machine) -> some View {
+        if let booking = store.running(on: machine) {
             card(color: booking.person.color) {
-                caption("Now washing")
-                Text(booking.person.name)
-                    .font(.system(size: 34, weight: .bold, design: .rounded))
-                Text(booking.timeRange)
-                    .font(.system(size: 15, weight: .medium))
-                    .opacity(0.85)
-                HStack(spacing: 10) {
-                    timerBox("Elapsed", systemImage: "stopwatch", value: BookingBar.clock(elapsed))
-                    timerBox(remaining >= 0 ? "Remaining" : "Over time", systemImage: "hourglass",
-                             value: BookingBar.clock(abs(remaining)), warning: remaining < 0)
-                }
-                .padding(.top, 6)
-                HStack(spacing: 10) {
-                    bigButton("Finished", systemImage: "stop.fill", color: BookingBar.finishRed) {
-                        confirmer.ask(PendingBarAction(action: .finish, booking: booking), store: store)
+                caption("\(machine.name) · in use", systemImage: machine.systemImage)
+                nameLine(booking)
+                TimelineView(.periodic(from: Date(), by: 1)) { context in
+                    let elapsed = context.date.timeIntervalSince(booking.startedAt ?? context.date)
+                    let remaining = TimeInterval(booking.minutes * 60) - elapsed
+                    HStack(spacing: 10) {
+                        timerBox("Elapsed", systemImage: "stopwatch", value: BookingBar.clock(elapsed))
+                        timerBox(remaining >= 0 ? "Remaining" : "Over time", systemImage: "hourglass",
+                                 value: BookingBar.clock(abs(remaining)), warning: remaining < 0)
                     }
-                    cancelButton(for: booking)
                 }
                 .padding(.top, 4)
+                adjustButton(for: booking)
             }
-        } else if let booking = store.due(at: now) {
+        } else if let booking = store.due(on: machine, at: now) {
             card(color: booking.person.color) {
-                caption("It's their turn")
-                Text(booking.person.name)
-                    .font(.system(size: 34, weight: .bold, design: .rounded))
-                Text("\(booking.timeRange) · ends \(Self.until(booking.end, from: now))")
-                    .font(.system(size: 15, weight: .medium))
+                caption("\(machine.name) · their turn", systemImage: machine.systemImage)
+                nameLine(booking)
+                Text("Not started yet · ends \(Self.until(booking.end, from: now))")
+                    .font(.system(size: 14, weight: .medium))
                     .opacity(0.85)
-                HStack(spacing: 10) {
-                    bigButton("Start", systemImage: "play.fill", color: BookingBar.startGreen) {
-                        confirmer.ask(PendingBarAction(action: .start, booking: booking), store: store)
-                    }
-                    cancelButton(for: booking)
-                }
-                .padding(.top, 8)
+                adjustButton(for: booking)
             }
         } else {
             card(color: Color.white.opacity(0.08)) {
-                caption("Machine is free")
-                Text("Nothing washing")
-                    .font(.system(size: 26, weight: .bold, design: .rounded))
-                Text(freeUntil(now: now))
+                caption("\(machine.name) · free", systemImage: machine.systemImage)
+                Text(freeUntil(on: machine))
                     .font(.system(size: 15, weight: .medium))
                     .foregroundColor(Theme.secondaryText)
             }
         }
     }
 
-    private func freeUntil(now: Date) -> String {
-        guard let next = store.upcoming(after: now).first else { return "No bookings coming up" }
+    private func nameLine(_ booking: Booking) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(booking.person.name)
+                .font(.system(size: 28, weight: .bold, design: .rounded))
+            Text(booking.timeRange)
+                .font(.system(size: 14, weight: .medium))
+                .opacity(0.85)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+    }
+
+    /// Opens the session's Start / Finished / Cancel menu.
+    private func adjustButton(for booking: Booking) -> some View {
+        Menu {
+            SessionMenuItems(booking: booking)
+        } label: {
+            Label("Adjust this session", systemImage: "slider.horizontal.3")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity, minHeight: 46)
+                .background(Color.black.opacity(0.3), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white.opacity(0.7)))
+        }
+        .padding(.top, 8)
+    }
+
+    private func freeUntil(on machine: Machine) -> String {
+        guard let next = store.upcoming(after: now).first(where: { $0.machine == machine }) else {
+            return "Nothing booked"
+        }
         return "Free until \(next.person.name)'s slot \(Self.until(next.start, from: now))"
     }
 
     // MARK: - Who's next
 
     @ViewBuilder
-    private func whosNext(now: Date) -> some View {
-        let upcoming = Array(store.upcoming(after: now).prefix(3))
+    private var whosNext: some View {
+        let upcoming = Array(store.upcoming(after: now).prefix(2))
         if let next = upcoming.first {
             card(color: next.person.color) {
-                Text(next.person.name)
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
-                Text("\(Self.dayName(next.start)) · \(next.timeRange)")
-                    .font(.system(size: 15, weight: .medium))
-                    .opacity(0.9)
-                if Calendar.current.isDate(next.start, inSameDayAs: now) {
-                    Text("Starts \(Self.until(next.start, from: now))")
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(next.person.name)
+                        .font(.system(size: 24, weight: .bold, design: .rounded))
+                    Label(next.machine.name, systemImage: next.machine.systemImage)
                         .font(.system(size: 15, weight: .semibold))
                 }
+                Text(next.timeRange)
+                    .font(.system(size: 15, weight: .medium))
+                    .opacity(0.9)
+                Text(Calendar.current.isDate(next.start, inSameDayAs: now)
+                     ? "Starts \(Self.until(next.start, from: now))"
+                     : Self.dayName(next.start))
+                    .font(.system(size: 15, weight: .semibold))
             }
             ForEach(upcoming.dropFirst()) { booking in
                 HStack(spacing: 10) {
                     Circle().fill(booking.person.color).frame(width: 12, height: 12)
                     Text(booking.person.name)
                         .font(.system(size: 17, weight: .semibold, design: .rounded))
+                    Image(systemName: booking.machine.systemImage)
+                        .font(.system(size: 13))
+                        .foregroundColor(Theme.secondaryText)
                     Spacer()
                     Text("\(Self.dayName(booking.start)) \(Booking.timeFormatter.string(from: booking.start))")
                         .font(.system(size: 15, weight: .medium))
@@ -184,11 +207,10 @@ struct StatusPanel: View {
         .background(color, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
-    private func caption(_ text: String) -> some View {
-        Text(text.uppercased())
+    private func caption(_ text: String, systemImage: String) -> some View {
+        Label(text.uppercased(), systemImage: systemImage)
             .font(.system(size: 12, weight: .bold))
-            .tracking(0.8)
-            .opacity(0.8)
+            .opacity(0.85)
     }
 
     private func timerBox(_ title: String, systemImage: String, value: String, warning: Bool = false) -> some View {
@@ -207,25 +229,6 @@ struct StatusPanel: View {
         .padding(10)
         .background(BookingBar.runningBlue, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white.opacity(0.5)))
-    }
-
-    private func bigButton(_ title: String, systemImage: String, color: Color,
-                           action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity, minHeight: 48)
-                .background(color, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white.opacity(0.7)))
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func cancelButton(for booking: Booking) -> some View {
-        bigButton("Cancel", systemImage: "xmark", color: Color.black.opacity(0.3)) {
-            confirmer.ask(PendingBarAction(action: .cancel, booking: booking), store: store)
-        }
     }
 
     // MARK: - Formatting

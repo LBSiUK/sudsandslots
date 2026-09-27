@@ -20,11 +20,20 @@ enum Person: String, CaseIterable, Codable, Identifiable {
     }
 }
 
+enum Machine: String, CaseIterable, Codable, Identifiable {
+    case washer, dryer
+
+    var id: String { rawValue }
+    var name: String { rawValue.capitalized }
+    var systemImage: String { self == .washer ? "drop.fill" : "wind" }
+}
+
 struct Booking: Codable, Identifiable, Equatable {
     var id = UUID()
     var person: Person
     var start: Date
     var minutes: Int
+    var machine: Machine = .washer
     /// Set when someone taps Start / Finished on the bar. Optional so older
     /// saved bookings still decode.
     var startedAt: Date?
@@ -57,6 +66,24 @@ struct Booking: Codable, Identifiable, Equatable {
     }()
 }
 
+extension Booking {
+    private enum CodingKeys: String, CodingKey {
+        case id, person, start, minutes, machine, startedAt, finishedAt
+    }
+
+    /// Bookings saved before there was a dryer have no machine: they're washes.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        person = try c.decode(Person.self, forKey: .person)
+        start = try c.decode(Date.self, forKey: .start)
+        minutes = try c.decode(Int.self, forKey: .minutes)
+        machine = try c.decodeIfPresent(Machine.self, forKey: .machine) ?? .washer
+        startedAt = try c.decodeIfPresent(Date.self, forKey: .startedAt)
+        finishedAt = try c.decodeIfPresent(Date.self, forKey: .finishedAt)
+    }
+}
+
 enum BookingError: LocalizedError {
     case noPerson
     case inPast
@@ -66,7 +93,7 @@ enum BookingError: LocalizedError {
         switch self {
         case .noPerson: return "Pick who's washing first."
         case .inPast:   return "That start time has already passed."
-        case .clash(let b): return "That clashes with \(b.person.name)'s slot (\(b.timeRange))."
+        case .clash(let b): return "That clashes with \(b.person.name)'s \(b.machine.name.lowercased()) slot (\(b.timeRange))."
         }
     }
 }
@@ -104,6 +131,9 @@ final class BookingStore: ObservableObject {
             Booking(person: .sam, start: at(18), minutes: 60),
             Booking(person: .ruby, start: at(21), minutes: 30),
             Booking(person: .ruby, start: at(9, day: 1), minutes: 120),
+            Booking(person: .izzy, start: at(9, 30), minutes: 60, machine: .dryer),
+            Booking(person: .sophie, start: at(14, 30), minutes: 90, machine: .dryer),
+            Booking(person: .ruby, start: at(10, day: 1), minutes: 60, machine: .dryer),
         ]
         // Show every bar state: Izzy's load is done, and Leon has one running
         // now (clearing any sample booking it would overlap).
@@ -113,8 +143,12 @@ final class BookingStore: ObservableObject {
         let slot = Calendar.current.dateComponents([.hour, .minute], from: now)
         let running = Booking(person: .leon, start: at(slot.hour!, slot.minute! < 30 ? 0 : 30), minutes: 90,
                               startedAt: now.addingTimeInterval(-17 * 60 - 42))
-        bookings.removeAll { $0.overlaps(start: running.start, end: running.end) }
+        bookings.removeAll { $0.machine == .washer && $0.overlaps(start: running.start, end: running.end) }
         bookings.append(running)
+        // …and Leon's load goes in the dryer straight after.
+        let drying = Booking(person: .leon, start: running.end, minutes: 60, machine: .dryer)
+        bookings.removeAll { $0.machine == .dryer && $0.overlaps(start: drying.start, end: drying.end) }
+        bookings.append(drying)
     }
     #endif
 
@@ -127,14 +161,14 @@ final class BookingStore: ObservableObject {
             .sorted { $0.start < $1.start }
     }
 
-    /// The load that's been started and not finished yet.
-    var running: Booking? {
-        bookings.filter(\.isRunning).max { $0.startedAt! < $1.startedAt! }
+    /// The session on this machine that's been started and not finished yet.
+    func running(on machine: Machine) -> Booking? {
+        bookings.filter { $0.machine == machine && $0.isRunning }.max { $0.startedAt! < $1.startedAt! }
     }
 
-    /// A booking whose slot is happening now but hasn't been started.
-    func due(at now: Date = Date()) -> Booking? {
-        bookings.first { $0.startedAt == nil && $0.start <= now && now < $0.end }
+    /// A booking on this machine whose slot is happening now but hasn't been started.
+    func due(on machine: Machine, at now: Date = Date()) -> Booking? {
+        bookings.first { $0.machine == machine && $0.startedAt == nil && $0.start <= now && now < $0.end }
     }
 
     /// Bookings still to come, soonest first.
@@ -143,20 +177,20 @@ final class BookingStore: ObservableObject {
     }
 
     /// The booking that would be made, or the reason it can't be.
-    func check(_ person: Person?, start: Date, minutes: Int) throws -> Booking {
+    func check(_ person: Person?, machine: Machine, start: Date, minutes: Int) throws -> Booking {
         guard let person = person else { throw BookingError.noPerson }
         let end = start.addingTimeInterval(TimeInterval(minutes * 60))
         // Allow booking the slot that's currently in progress, just not one
         // that has already finished starting.
         guard end > Date() else { throw BookingError.inPast }
-        if let clash = bookings.first(where: { $0.overlaps(start: start, end: end) }) {
+        if let clash = bookings.first(where: { $0.machine == machine && $0.overlaps(start: start, end: end) }) {
             throw BookingError.clash(clash)
         }
-        return Booking(person: person, start: start, minutes: minutes)
+        return Booking(person: person, start: start, minutes: minutes, machine: machine)
     }
 
-    func book(_ person: Person?, start: Date, minutes: Int) throws {
-        bookings.append(try check(person, start: start, minutes: minutes))
+    func book(_ person: Person?, machine: Machine, start: Date, minutes: Int) throws {
+        bookings.append(try check(person, machine: machine, start: start, minutes: minutes))
         save()
     }
 
@@ -195,6 +229,7 @@ final class BookingForm: ObservableObject {
     /// Minutes after midnight, in 30-minute steps.
     @Published var startMinutes: Int
     @Published var durationMinutes = 60
+    @Published var machine: Machine = .washer
     /// Days from today of the day being viewed and booked.
     @Published var dayOffset = 0
 

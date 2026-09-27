@@ -72,9 +72,7 @@ struct CalendarView: View {
 /// The scrollable 24-hour column with bookings laid over it. Hours are sized
 /// so 8 AM to midnight exactly fills the visible area.
 struct TimelineGrid: View {
-    @EnvironmentObject var store: BookingStore
     @EnvironmentObject var idle: IdleMonitor
-    @EnvironmentObject var confirmer: Confirmer
     let day: Date
     let bookings: [Booking]
 
@@ -97,6 +95,49 @@ struct TimelineGrid: View {
     }
 
     var body: some View {
+        VStack(spacing: 0) {
+            columnHeaders
+            timeline
+        }
+    }
+
+    /// Where the washer and dryer columns sit, given the grid's full width.
+    private struct Columns {
+        let x: CGFloat, width: CGFloat, gap: CGFloat
+
+        init(totalWidth: CGFloat, leading: CGFloat) {
+            gap = 8
+            x = leading
+            width = (totalWidth - leading - 28 - gap) / 2
+        }
+
+        func x(for machine: Machine) -> CGFloat {
+            machine == .washer ? x : x + width + gap
+        }
+
+        var all: CGFloat { width * 2 + gap }
+    }
+
+    private func columns(for width: CGFloat) -> Columns {
+        Columns(totalWidth: width, leading: labelWidth + 10)
+    }
+
+    private var columnHeaders: some View {
+        GeometryReader { geo in
+            let cols = columns(for: geo.size.width)
+            ForEach(Machine.allCases) { machine in
+                Label(machine.name, systemImage: machine.systemImage)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(Theme.secondaryText)
+                    .frame(width: cols.width, height: 34)
+                    .offset(x: cols.x(for: machine))
+            }
+        }
+        .frame(height: 34)
+        .overlay(Divider().overlay(Theme.panelStroke), alignment: .bottom)
+    }
+
+    private var timeline: some View {
         GeometryReader { outer in
             ScrollViewReader { proxy in
                 ScrollView {
@@ -104,11 +145,16 @@ struct TimelineGrid: View {
                         scrollAnchors
                         gridLines
                         GeometryReader { geo in
-                            let width = geo.size.width - labelWidth - 28
-                            // Drawn first so bars sit on top of the now-line.
-                            nowLine(width: width)
+                            let cols = columns(for: geo.size.width)
+                            // Faint rule between the washer and dryer columns.
+                            Rectangle()
+                                .fill(Theme.panelStroke)
+                                .frame(width: 1, height: geo.size.height)
+                                .offset(x: cols.x + cols.width + cols.gap / 2)
+                            // Drawn before the bars so they sit on top of it.
+                            nowLine(width: cols.all)
                             ForEach(bookings) { booking in
-                                block(for: booking, width: width)
+                                block(for: booking, columns: cols)
                             }
                         }
                     }
@@ -192,20 +238,19 @@ struct TimelineGrid: View {
         return topInset + CGFloat(minutes) / 60 * hourHeight
     }
 
-    private func block(for booking: Booking, width: CGFloat) -> some View {
+    private func block(for booking: Booking, columns cols: Columns) -> some View {
         // Clip to this day so slots that cross midnight show on both days.
         let top = max(y(for: booking.start), topInset)
         let bottom = min(y(for: booking.end), topInset + hourHeight * 24)
         // 30-minute slots are too thin for their buttons, so let a bar grow into
         // the free time below it, but never over the next booking.
-        let nextTop = bookings.first(where: { $0.start >= booking.end }).map { y(for: $0.start) }
+        let nextTop = bookings.first(where: { $0.machine == booking.machine && $0.start >= booking.end })
+            .map { y(for: $0.start) }
             ?? .greatestFiniteMagnitude
         let height = min(max(bottom - top - 3, Self.minBarHeight), max(nextTop - top - 3, 16))
 
-        return BookingBar(booking: booking, width: width, height: height) { action in
-            confirmer.ask(PendingBarAction(action: action, booking: booking), store: store)
-        }
-        .offset(x: labelWidth + 10, y: top + 1.5)
+        return BookingBar(booking: booking, width: cols.width, height: height)
+            .offset(x: cols.x(for: booking.machine), y: top + 1.5)
         .transition(.opacity.combined(with: .scale(scale: 0.95)))
     }
 

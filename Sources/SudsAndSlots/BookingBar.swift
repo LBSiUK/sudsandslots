@@ -4,7 +4,7 @@ enum BarAction {
     case start, finish, cancel
 }
 
-/// A bar button tap waiting for confirmation.
+/// A session action waiting for confirmation.
 struct PendingBarAction {
     let action: BarAction
     let booking: Booking
@@ -18,11 +18,11 @@ struct PendingBarAction {
     }
 
     var question: String {
-        let name = booking.person.name
+        let whose = "\(booking.person.name)'s \(booking.machine.name.lowercased())"
         switch action {
-        case .start: return "start \(name)'s wash"
-        case .finish: return "mark \(name)'s wash as finished"
-        case .cancel: return "cancel \(name)'s booking"
+        case .start: return "start \(whose) session"
+        case .finish: return "mark \(whose) session as finished"
+        case .cancel: return "cancel \(whose) booking"
         }
     }
 
@@ -37,10 +37,8 @@ struct PendingBarAction {
     }
 }
 
-/// One booking on the timeline:
-/// [In use | Done] [Cancel] Name ……… time range
 extension Confirmer {
-    /// Ask "Are you sure…" for a Start / Finish / Cancel tap, then do it.
+    /// Ask "Are you sure…" for a Start / Finish / Cancel choice, then do it.
     func ask(_ pending: PendingBarAction, store: BookingStore) {
         ask(pending.question, detail: pending.detail, confirmTitle: pending.buttonTitle,
             destructive: pending.action == .cancel) {
@@ -58,40 +56,72 @@ extension Confirmer {
     }
 }
 
+/// The "Adjust this session" menu contents: only the actions that make sense
+/// for the booking right now. Each one still asks for confirmation.
+struct SessionMenuItems: View {
+    @EnvironmentObject var store: BookingStore
+    @EnvironmentObject var confirmer: Confirmer
+    let booking: Booking
+
+    var body: some View {
+        if booking.canStart {
+            Button { ask(.start) } label: { Label("Start", systemImage: "play.fill") }
+        }
+        if booking.isRunning {
+            Button { ask(.finish) } label: { Label("Finished", systemImage: "stop.fill") }
+        }
+        Button(role: .destructive) { ask(.cancel) } label: {
+            Label("Cancel Booking", systemImage: "xmark")
+        }
+    }
+
+    private func ask(_ action: BarAction) {
+        confirmer.ask(PendingBarAction(action: action, booking: booking), store: store)
+    }
+}
+
+/// One booking on the timeline. Tapping anywhere on it opens the session menu.
+///   [status] Name  time range ……… (…)
 struct BookingBar: View {
     let booking: Booking
     let width: CGFloat
     let height: CGFloat
-    /// Called when a button is tapped; the calendar asks for confirmation.
-    let onAction: (BarAction) -> Void
 
-    /// Short bars (30-minute slots) get icon-only controls so they still fit.
+    /// Short bars (30-minute slots) get a smaller type size.
     private var compact: Bool { height < 30 }
-    private var controlHeight: CGFloat { compact ? max(height - 4, 12) : min(height - 10, 32) }
-    private var controlFont: Font { .system(size: compact ? 11 : 14, weight: .semibold) }
+    /// Tall enough to put the time range on its own line.
+    private var twoLine: Bool { height >= 48 }
 
     var body: some View {
-        HStack(spacing: compact ? 6 : 8) {
-            // Start / Finished and the timers live in the left panel's
-            // Current wash card; the bar just shows the state.
-            if booking.finishedAt != nil {
-                doneBadge
-            } else if booking.isRunning {
-                inUseBadge
+        Menu {
+            SessionMenuItems(booking: booking)
+        } label: {
+            bar
+        }
+        .accessibilityLabel("Adjust \(booking.person.name)'s session")
+    }
+
+    private var bar: some View {
+        HStack(spacing: 6) {
+            statusIcon
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    Text(booking.person.name)
+                        .font(.system(size: compact ? 14 : 17, weight: .bold, design: .rounded))
+                        .layoutPriority(1)
+                    if !twoLine {
+                        timeText
+                    }
+                }
+                if twoLine {
+                    timeText
+                }
             }
-            if booking.finishedAt == nil {
-                pill("Cancel", systemImage: "xmark", color: Color.black.opacity(0.3)) { onAction(.cancel) }
-            }
-            Text(booking.person.name)
-                .font(.system(size: compact ? 14 : 18, weight: .bold, design: .rounded))
-                .lineLimit(1)
-                .layoutPriority(1)
-            Spacer(minLength: 4)
-            Text(booking.timeRange)
-                .font(.system(size: compact ? 12 : 15, weight: .medium))
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
+            .lineLimit(1)
+            Spacer(minLength: 2)
+            Image(systemName: "ellipsis.circle.fill")
+                .font(.system(size: compact ? 16 : 20))
+                .opacity(0.9)
         }
         .foregroundColor(.white)
         .padding(.horizontal, compact ? 8 : 10)
@@ -99,54 +129,33 @@ struct BookingBar: View {
         .background(booking.person.color, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.white.opacity(0.25)))
         .shadow(color: .black.opacity(0.3), radius: 6, y: 3)
+        .contentShape(Rectangle())
     }
 
-    // MARK: - Pieces
-
-    private var inUseBadge: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "stopwatch")
-            if !compact { Text("In use") }
-        }
-        .font(controlFont)
-        .padding(.horizontal, compact ? 6 : 10)
-        .frame(height: controlHeight)
-        .background(Self.runningBlue, in: Capsule())
-        .overlay(Capsule().stroke(Color.white.opacity(0.7), lineWidth: 1))
+    private var timeText: some View {
+        Text(booking.timeRange)
+            .font(.system(size: compact ? 11 : 13, weight: .medium))
+            .monospacedDigit()
+            .opacity(0.9)
+            .minimumScaleFactor(0.8)
     }
 
-    private var doneBadge: some View {
-        let taken = (booking.finishedAt ?? Date()).timeIntervalSince(booking.startedAt ?? Date())
-        return HStack(spacing: 4) {
+    /// In use = stopwatch on blue, done = tick; nothing for a session that hasn't begun.
+    @ViewBuilder
+    private var statusIcon: some View {
+        let size: CGFloat = compact ? 18 : 24
+        if booking.finishedAt != nil {
             Image(systemName: "checkmark")
-            if !compact { Text("Done") }
-            Text(Self.clock(taken)).monospacedDigit()
+                .font(.system(size: size * 0.5, weight: .bold))
+                .frame(width: size, height: size)
+                .background(Color.black.opacity(0.3), in: Circle())
+        } else if booking.isRunning {
+            Image(systemName: "stopwatch")
+                .font(.system(size: size * 0.55, weight: .bold))
+                .frame(width: size, height: size)
+                .background(Self.runningBlue, in: Circle())
+                .overlay(Circle().stroke(Color.white.opacity(0.7), lineWidth: 1))
         }
-        .font(controlFont)
-        .padding(.horizontal, compact ? 6 : 10)
-        .frame(height: controlHeight)
-        .background(Color.black.opacity(0.3), in: Capsule())
-    }
-
-    private func pill(_ title: String, systemImage: String, color: Color,
-                      action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                Image(systemName: systemImage)
-                    .font(.system(size: compact ? 9 : 11, weight: .bold))
-                if !compact { Text(title) }
-            }
-            .font(controlFont)
-            .foregroundColor(.white)
-            .padding(.horizontal, compact ? 6 : 10)
-            .frame(minWidth: compact ? controlHeight + 8 : nil)
-            .frame(height: controlHeight)
-            .background(color, in: Capsule())
-            .overlay(Capsule().stroke(Color.white.opacity(0.7), lineWidth: 1))
-            .fixedSize()
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(title)
     }
 
     // MARK: - Helpers
