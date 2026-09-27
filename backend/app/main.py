@@ -226,14 +226,14 @@ def create_app(
         return {"version": v, "booking": b.to_json(), "moves": [m.to_json() for m in moves]}
 
     @app.get("/api/v1/bookings/{booking_id}/move-plan")
-    async def move_plan(booking_id: str, minutes: str | None = None):
-        _, new_start, moves = store.move_plan(booking_id, minutes)
+    async def move_plan(booking_id: str, minutes: str | None = None, start: str | None = None):
+        _, new_start, moves = store.move_plan(booking_id, minutes, start)
         return {"newStart": fmt_time(new_start), "moves": [m.to_json() for m in moves]}
 
     @app.post("/api/v1/bookings/{booking_id}/move")
     async def move(booking_id: str, request: Request):
         data = await body(request)
-        v, b, moves, notes = store.move(booking_id, data.get("minutes"))
+        v, b, moves, notes = store.move(booking_id, data.get("minutes"), data.get("start"))
         changed(v)
         delivery.send(notes)
         return {"version": v, "booking": b.to_json(), "moves": [m.to_json() for m in moves]}

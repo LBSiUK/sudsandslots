@@ -360,13 +360,14 @@ struct QuickAddSheet: View {
         return nil
     }
 
-    /// Red banner at the very top when "Now" would clash with someone's cycle.
+    /// Red banner at the very top when "Now" would clash with someone:
+    /// "Leon is using the washer until 1:40 AM tomorrow".
     private func nowBanner(_ blocker: Booking) -> some View {
-        let until = Self.time(blocker.end)
-        let green = Text("Next free").bold().foregroundColor(BookingBar.startGreen)
-        let message: Text = blocker.startedAt == nil
-            ? Text("Someone else already has a cycle running until \(until). You can start one now but it will move their cycle, or use ") + green + Text(".")
-            : Text("Someone else already has a cycle running until \(until). It's already in, so it can't be moved: use ") + green + Text(".")
+        let item = blocker.machine.name.lowercased()
+        let when = Self.time(blocker.end) + Self.dayWord(blocker.end)
+        let message = Text(blocker.startedAt == nil
+            ? "\(blocker.person.name) has the \(item) booked until \(when)"
+            : "\(blocker.person.name) is using the \(item) until \(when)")
         return HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.octagon.fill")
                 .font(.system(size: 20))
@@ -640,6 +641,13 @@ struct QuickAddSheet: View {
 
     static func time(_ date: Date) -> String {
         Booking.timeFormatter.string(from: date)
+    }
+
+    /// "" today, " tomorrow" or " on Tuesday" otherwise, to follow a time.
+    static func dayWord(_ date: Date) -> String {
+        if Calendar.current.isDateInToday(date) { return "" }
+        if Calendar.current.isDateInTomorrow(date) { return " tomorrow" }
+        return " on \(CalendarView.weekday.string(from: date))"
     }
 
     /// "12:00 PM" today, "Tomorrow 12:00 PM" or "Tue 12:00 PM" otherwise.

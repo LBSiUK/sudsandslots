@@ -461,14 +461,18 @@ class Store:
 
     # -- move along
 
-    def move_plan(self, booking_id: str, minutes: Any) -> tuple[Booking, datetime, list[Move]]:
-        """Slide a not-yet-started booking `minutes` later; later bookings on the
-        machine that it now overlaps are pushed along (night rule applies)."""
-        minutes = self._minutes(minutes)
+    def move_plan(self, booking_id: str, minutes: Any = None,
+                  start: Any = None) -> tuple[Booking, datetime, list[Move]]:
+        """Reschedule a not-yet-started booking: `minutes` later, or to an exact
+        `start` (earlier or later). Bookings on the machine that it now overlaps
+        are pushed along (night rule applies to them)."""
         b = self.get(booking_id)
         if b.started_at or b.finished_at:
             raise ApiError("cannot_move", "That session has already started, so it can't be moved.", 409)
-        new_start = b.start + timedelta(minutes=minutes)
+        if start is not None:
+            new_start = parse_time(start, "start")
+        else:
+            new_start = b.start + timedelta(minutes=self._minutes(minutes))
         new_end = new_start + timedelta(minutes=b.minutes)
         if new_end <= self.now():
             raise ApiError("in_past", "That would put it entirely in the past.", 422)
@@ -477,9 +481,10 @@ class Store:
         return b, new_start, (self.cascade([(new_start, new_end)], others, block_started=True)
                               + self.follow_ons(b, new_end))
 
-    def move(self, booking_id: str, minutes: Any) -> tuple[int, Booking, list[Move], list[dict]]:
+    def move(self, booking_id: str, minutes: Any = None,
+             start: Any = None) -> tuple[int, Booking, list[Move], list[dict]]:
         with self.lock:
-            b, new_start, moves = self.move_plan(booking_id, minutes)
+            b, new_start, moves = self.move_plan(booking_id, minutes, start)
             now = self.now()
             moved = replace(b, start=new_start, updated_at=now)
             notes = []

@@ -179,7 +179,7 @@ struct StatusPanel: View {
 
     /// One button per action, only the ones that make sense right now:
     /// running → Finished, Extend, Cancel; not started → Start (tap = now,
-    /// hold = started earlier), Extend, Move along, Cancel.
+    /// hold = started earlier), Extend, Reschedule, Cancel.
     private func actionButtons(for booking: Booking) -> some View {
         HStack(spacing: 8) {
             if booking.canStart {
@@ -206,21 +206,23 @@ struct StatusPanel: View {
             }
             if booking.finishedAt == nil {
                 Menu { ExtendMenuItems(booking: booking) } label: {
-                    actionTile("Extend", systemImage: "clock.arrow.circlepath")
+                    actionTile("Extend", systemImage: "clock.arrow.circlepath", fill: Self.extendBlue)
                 }
             }
             if booking.startedAt == nil && booking.finishedAt == nil {
                 Menu { MoveAlongItems(booking: booking) } label: {
-                    actionTile("Move along", systemImage: "arrow.right.to.line")
+                    actionTile("Reschedule", systemImage: "calendar.badge.clock", fill: BookingBar.finishRed)
                 }
             }
             Button { ask(.cancel, booking) } label: {
-                actionTile("Cancel", systemImage: "xmark")
+                actionTile("Cancel", systemImage: "xmark", fill: BookingBar.finishRed)
             }
             .buttonStyle(.plain)
         }
         .padding(.top, 6)
     }
+
+    static let extendBlue = Color(red: 0.10, green: 0.42, blue: 0.95)
 
     private func ask(_ action: BarAction, _ booking: Booking) {
         confirmer.ask(PendingBarAction(action: action, booking: booking), store: store)

@@ -268,11 +268,11 @@ final class SyncService {
         }
     }
 
-    func move(_ booking: Booking, by minutes: Int) {
+    func move(_ booking: Booking, to start: Date) {
         let id = booking.id
         mutate("move") { [weak self] client in
             guard let self = self else { return }
-            let result = try await client.move(self.serverID(id), minutes: minutes)
+            let result = try await client.move(self.serverID(id), start: start)
             self.store?.adoptServerBooking(result.booking.booking)
             for move in result.moves {
                 var moved = move.booking.booking

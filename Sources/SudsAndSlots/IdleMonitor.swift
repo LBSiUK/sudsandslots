@@ -17,6 +17,14 @@ final class IdleMonitor: ObservableObject {
     // calendar polls it on a timer instead of re-rendering on each change.
     private(set) var lastInteraction = Date()
 
+    /// Whether a finger is on the screen right now. The calendar's pull-to-
+    /// change-day uses it to act only once the finger lifts.
+    private(set) var isTouching = false
+
+    fileprivate func setTouching(_ touching: Bool) {
+        isTouching = touching
+    }
+
     fileprivate func touched() {
         lastInteraction = Date()
     }
@@ -69,6 +77,7 @@ struct IdleTouchWatcher: UIViewRepresentable {
 
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
             monitor.touched()
+            monitor.setTouching(true)
         }
 
         override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
@@ -78,12 +87,18 @@ struct IdleTouchWatcher: UIViewRepresentable {
         // Count the moment a finger lifts as the last use, then step aside.
         override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
             monitor.touched()
+            monitor.setTouching(Self.anyStillDown(event))
             state = .failed
         }
 
         override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
             monitor.touched()
+            monitor.setTouching(Self.anyStillDown(event))
             state = .failed
+        }
+
+        private static func anyStillDown(_ event: UIEvent) -> Bool {
+            event.allTouches?.contains { $0.phase != .ended && $0.phase != .cancelled } ?? false
         }
 
         func gestureRecognizer(_ g: UIGestureRecognizer,

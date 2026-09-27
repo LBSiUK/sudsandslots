@@ -11,7 +11,7 @@ struct CalendarView: View {
                 .padding(.horizontal, 24)
                 .padding(.vertical, 18)
             Divider().overlay(Theme.panelStroke)
-            TimelineGrid(day: form.day, bookings: store.bookings(on: form.day))
+            TimelineGrid(day: form.day, bookings: store.bookings(on: form.day)) { form.dayOffset += $0 }
         }
     }
 
@@ -75,6 +75,16 @@ struct TimelineGrid: View {
     @EnvironmentObject var idle: IdleMonitor
     let day: Date
     let bookings: [Booking]
+    /// Pull past midnight at either end: +1 = next day, -1 = previous day.
+    var changeDay: (Int) -> Void = { _ in }
+
+    /// How far past the top (+) or bottom (−) of the day the list is pulled.
+    @State private var pull: CGFloat = 0
+    /// Set once pulled past the threshold; acted on when the finger lifts.
+    @State private var armed: Int?
+    /// Where to land after a pull changes the day (0 = midnight, 23 = 11 PM).
+    @State private var landOn: Int?
+    private let pullThreshold: CGFloat = 80
 
     @State private var viewportHeight: CGFloat = 0
     /// Hour last scrolled to automatically; cleared by any touch so the next
@@ -164,15 +174,81 @@ struct TimelineGrid: View {
                         }
                     }
                     .frame(height: hourHeight * 24 + topInset * 2)
+                    .background(GeometryReader { g in
+                        Color.clear.preference(key: TimelineOffsetKey.self,
+                                               value: g.frame(in: .named("timeline")).minY)
+                    })
                 }
+                .coordinateSpace(name: "timeline")
+                .onPreferenceChange(TimelineOffsetKey.self) { pulled(topOffset: $0) }
+                .overlay(alignment: .top) { pullHint(direction: -1) }
+                .overlay(alignment: .bottom) { pullHint(direction: 1) }
                 .onAppear {
                     viewportHeight = outer.size.height
                     DispatchQueue.main.async { scroll(proxy, to: defaultHour(), animated: false) }
                 }
                 .onChange(of: outer.size.height) { viewportHeight = $0 }
-                .onChange(of: day) { _ in scroll(proxy, to: defaultHour(), animated: true) }
+                .onChange(of: day) { _ in
+                    // Pulled past midnight: carry on from the edge you came through.
+                    if let edge = landOn {
+                        landOn = nil
+                        scroll(proxy, to: edge, animated: false)
+                    } else {
+                        scroll(proxy, to: defaultHour(), animated: true)
+                    }
+                }
                 .onReceive(idleCheck) { _ in autoScrollIfIdle(proxy) }
             }
+        }
+    }
+
+    /// Tracks overscroll at either end. Past the threshold it arms (with a
+    /// tap of haptics); letting go while armed changes the day; easing back
+    /// off before letting go cancels it.
+    private func pulled(topOffset: CGFloat) {
+        let content = hourHeight * 24 + topInset * 2
+        let top = max(topOffset, 0)
+        let bottom = max(viewportHeight - (content + topOffset), 0)
+        pull = top > 0 ? top : -bottom
+        let direction = top > 0 ? -1 : (bottom > 0 ? 1 : 0)
+        let distance = max(top, bottom)
+        if distance >= pullThreshold, armed == nil, idle.isTouching {
+            armed = direction
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        } else if let armedDirection = armed {
+            if !idle.isTouching {
+                armed = nil
+                landOn = armedDirection > 0 ? 0 : 23
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                changeDay(armedDirection)
+            } else if distance < pullThreshold * 0.6 {
+                armed = nil
+            }
+        }
+    }
+
+    /// "Pull for Monday" / "Release for Monday", shown while pulling.
+    @ViewBuilder
+    private func pullHint(direction: Int) -> some View {
+        let distance = direction < 0 ? max(pull, 0) : max(-pull, 0)
+        if distance > 8 {
+            let target = Calendar.current.date(byAdding: .day, value: direction, to: day)!
+            let name = Calendar.current.isDateInToday(target) ? "Today"
+                : Calendar.current.isDateInTomorrow(target) ? "Tomorrow"
+                : Calendar.current.isDateInYesterday(target) ? "Yesterday"
+                : CalendarView.weekday.string(from: target)
+            let ready = armed == direction
+            Label(ready ? "Release for \(name)"
+                        : "Drag a little harder to go to the \(direction < 0 ? "previous" : "next") day",
+                  systemImage: direction < 0 ? "arrow.down.circle.fill" : "arrow.up.circle.fill")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundColor(ready ? .black : .white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(ready ? Color.white : Color.white.opacity(0.18 + 0.3 * min(distance / pullThreshold, 1)),
+                            in: Capsule())
+                .padding(12)
+                .allowsHitTesting(false)
         }
     }
 
@@ -297,4 +373,10 @@ struct DashedLine: Shape {
         p.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
         return p
     }
+}
+
+/// The timeline's content offset, for pull-past-midnight.
+private struct TimelineOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }

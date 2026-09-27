@@ -603,3 +603,18 @@ def test_starting_finishes_a_forgotten_load_on_the_same_machine(client, book, cl
     by_id = {b["id"]: b for b in listed(client)}
     assert by_id[old["id"]]["finishedAt"] == "2026-09-27T13:05:00Z"    # Sam's wash marked finished
     assert by_id[dryer["id"]]["finishedAt"] is None                    # Izzy's dryer untouched
+
+
+def test_reschedule_to_an_exact_time_earlier_or_later(client, book):
+    leon = book("leon", "2026-09-27T15:00:00Z", ("washer", 60))[0]     # 4-5 PM
+    ruby = book("ruby", "2026-09-28T09:00:00Z", ("washer", 60))[0]     # tomorrow 10-11 AM
+    # later, onto Ruby: she's pushed along
+    plan = client.get(f"{API}/bookings/{leon['id']}/move-plan", params={"start": "2026-09-28T08:30:00Z"}).json()
+    assert plan["newStart"] == "2026-09-28T08:30:00Z"
+    assert [(m["booking"]["id"], m["newStart"]) for m in plan["moves"]] == [(ruby["id"], "2026-09-28T09:30:00Z")]
+    # earlier, into free time: nobody moves
+    r = client.post(f"{API}/bookings/{leon['id']}/move", json={"start": "2026-09-27T13:00:00Z"})
+    assert r.status_code == 200 and r.json()["booking"]["start"] == "2026-09-27T13:00:00Z" and r.json()["moves"] == []
+    # into the past: refused
+    r = client.post(f"{API}/bookings/{leon['id']}/move", json={"start": "2026-09-27T09:00:00Z"})
+    assert r.status_code == 422 and r.json()["error"] == "in_past"

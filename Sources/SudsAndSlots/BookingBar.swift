@@ -7,9 +7,11 @@ enum BarAction: Equatable {
     case extend(minutes: Int)
     /// Slide the session later, pushing whoever's after it along.
     case moveAlong(minutes: Int)
+    /// Reschedule to an exact new start ("Set new time and date").
+    case moveTo(Date)
 }
 
-/// The choices offered under Move along.
+/// The choices offered under Reschedule (later by…).
 let moveOptions = [15, 30, 45, 60, 120]
 
 /// "Started earlier" choices, up to the 4-hour limit.
@@ -36,7 +38,7 @@ struct PendingBarAction {
         case .finish: return "Finish"
         case .cancel: return "Cancel Booking"
         case .extend: return "Extend"
-        case .moveAlong: return "Move"
+        case .moveAlong, .moveTo: return "Reschedule"
         }
     }
 
@@ -48,7 +50,9 @@ struct PendingBarAction {
         case .finish: return "mark \(whose) session as finished"
         case .cancel: return "cancel \(whose) booking"
         case .extend(let minutes): return "extend \(whose) session by \(extendLabel(minutes))"
-        case .moveAlong(let minutes): return "move \(whose) session along by \(extendLabel(minutes))"
+        case .moveAlong(let minutes): return "reschedule \(whose) session \(extendLabel(minutes)) later"
+        case .moveTo(let start):
+            return "reschedule \(whose) session to \(CalendarView.weekday.string(from: start)) \(Booking.timeFormatter.string(from: start))"
         }
     }
 
@@ -66,8 +70,8 @@ struct PendingBarAction {
             return "Started at \(Booking.timeFormatter.string(from: at)) · booked \(booking.timeRange)"
         case .start, .cancel:
             return booking.timeRange
-        case .moveAlong(let minutes):
-            let start = booking.start.addingTimeInterval(TimeInterval(minutes * 60))
+        case .moveAlong, .moveTo:
+            let start = newStart!
             let end = start.addingTimeInterval(TimeInterval(booking.minutes * 60))
             var lines = ["Now \(Booking.timeFormatter.string(from: start)) – \(Booking.timeFormatter.string(from: end))."]
             lines += moves.map { Self.moveLine($0, actor: booking.person) }
@@ -90,6 +94,15 @@ func nextAfternoon(_ move: SessionMove) -> String {
 }
 
 extension PendingBarAction {
+    /// Where a reschedule puts the booking.
+    var newStart: Date? {
+        switch action {
+        case .moveAlong(let minutes): return booking.start.addingTimeInterval(TimeInterval(minutes * 60))
+        case .moveTo(let start): return start
+        default: return nil
+        }
+    }
+
     /// One line per moved session: other people are told, your own next stage
     /// just follows.
     static func moveLine(_ move: SessionMove, actor: Person?) -> String {
@@ -113,8 +126,8 @@ extension Confirmer {
         switch pending.action {
         case .extend(let minutes):
             moves = store.extensionPlan(for: pending.booking, by: minutes)
-        case .moveAlong(let minutes):
-            moves = (try? store.movePlan(for: pending.booking, by: minutes)) ?? []
+        case .moveAlong, .moveTo:
+            moves = (try? store.movePlan(for: pending.booking, to: pending.newStart!)) ?? []
         case .start:
             forgotten = store.forgottenLoads(before: pending.booking)
         default:
@@ -135,10 +148,10 @@ extension Confirmer {
             case .extend(let minutes):
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 withAnimation { store.extend(pending.booking, by: minutes) }
-            case .moveAlong(let minutes):
+            case .moveAlong, .moveTo:
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 withAnimation {
-                    do { try store.move(pending.booking, by: minutes) } catch let e as BookingError {
+                    do { try store.move(pending.booking, to: pending.newStart!) } catch let e as BookingError {
                         store.syncError = e.errorDescription
                     } catch {}
                 }
@@ -206,7 +219,7 @@ struct ExtendMenu: View {
     }
 }
 
-/// "Move along" with the lengths that are actually possible (not onto a load
+/// "Reschedule": later by the lengths that are actually possible (not onto a load
 /// that's in, not into the past). Whoever's after it gets pushed along.
 struct MoveAlongMenu: View {
     let booking: Booking
@@ -215,7 +228,7 @@ struct MoveAlongMenu: View {
         Menu {
             MoveAlongItems(booking: booking)
         } label: {
-            Label("Move along", systemImage: "arrow.right.to.line")
+            Label("Reschedule", systemImage: "calendar.badge.clock")
         }
     }
 }
@@ -223,12 +236,13 @@ struct MoveAlongMenu: View {
 struct MoveAlongItems: View {
     @EnvironmentObject var store: BookingStore
     @EnvironmentObject var confirmer: Confirmer
+    @EnvironmentObject var rescheduler: Rescheduler
     let booking: Booking
 
     var body: some View {
         let possible = moveOptions.filter { (try? store.movePlan(for: booking, by: $0)) != nil }
         if possible.isEmpty {
-            Text("Can't move: the next slot is taken by a load that's already in")
+            Text("Can't push it later: a load that's already in is in the way")
         }
         ForEach(possible, id: \.self) { minutes in
             let pushes = (try? store.movePlan(for: booking, by: minutes))?.contains { $0.booking.person != booking.person } ?? false
@@ -237,6 +251,10 @@ struct MoveAlongItems: View {
             } label: {
                 Label("+ \(extendLabel(minutes))", systemImage: pushes ? "arrow.right.circle" : "clock")
             }
+        }
+        Divider()
+        Button { rescheduler.booking = booking } label: {
+            Label("Set new time and date…", systemImage: "calendar")
         }
     }
 }

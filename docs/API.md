@@ -107,8 +107,8 @@ Codes: `no_person`, `nothing_chosen`, `in_past` (all 422), `clash` (409),
 | `POST /api/v1/bookings/{id}/finish` | | `{"version", "booking"}` |
 | `GET /api/v1/bookings/{id}/extend-plan?minutes=N` | | `{"moves": [Move]}` |
 | `POST /api/v1/bookings/{id}/extend` | `{"minutes": N}` (1…1440) | `{"version", "booking", "moves": [Move]}` |
-| `GET /api/v1/bookings/{id}/move-plan?minutes=N` | | `{"newStart", "moves": [Move]}` or the error the move would get |
-| `POST /api/v1/bookings/{id}/move` | `{"minutes": N}` (1…1440) | `{"version", "booking", "moves": [Move]}` — "move along": slide a not-started booking later |
+| `GET /api/v1/bookings/{id}/move-plan?minutes=N` or `?start=<iso>` | | `{"newStart", "moves": [Move]}` or the error the move would get |
+| `POST /api/v1/bookings/{id}/move` | `{"minutes": N}` (1…1440) or `{"start": "<iso>"}` | `{"version", "booking", "moves": [Move]}` — reschedule a not-started booking: N minutes later, or to an exact new start (earlier or later) |
 | `DELETE /api/v1/bookings/{id}` | | `{"version"}` |
 | `POST /api/v1/import` | `{"bookings": [Booking]}` | `{"version", "imported": <int>}` — inserts bookings whose id the server doesn't have (existing ids are skipped, never overwritten); for moving an iPad's local data up |
 | `GET /api/v1/notifications?person=leon&unread=1` | | `{"notifications": [Notification]}` newest first |

@@ -516,13 +516,17 @@ final class BookingStore: ObservableObject {
             + (try followOns(of: next, newEnd: end))
     }
 
-    /// Move along: slide a not-yet-started booking `minutes` later. Later
+    /// Reschedule later: slide a not-yet-started booking `minutes` later. Later
     /// bookings it now overlaps on its machine are pushed along (night rule
     /// for them), and the person's own next stage follows. Throws if it has
     /// started, would end in the past, or would land on a load that's in.
     func movePlan(for booking: Booking, by minutes: Int) throws -> [SessionMove] {
+        try movePlan(for: booking, to: booking.start.addingTimeInterval(TimeInterval(minutes * 60)))
+    }
+
+    /// Reschedule to an exact start (earlier or later), same rules as above.
+    func movePlan(for booking: Booking, to start: Date) throws -> [SessionMove] {
         guard booking.startedAt == nil, booking.finishedAt == nil else { throw BookingError.alreadyStarted }
-        let start = booking.start.addingTimeInterval(TimeInterval(minutes * 60))
         let end = start.addingTimeInterval(TimeInterval(booking.minutes * 60))
         guard end > Date() else { throw BookingError.inPast }
         let others = bookings
@@ -533,12 +537,16 @@ final class BookingStore: ObservableObject {
     }
 
     func move(_ booking: Booking, by minutes: Int) throws {
-        let moves = try movePlan(for: booking, by: minutes)
-        update(booking) { $0.start = $0.start.addingTimeInterval(TimeInterval(minutes * 60)) }
+        try move(booking, to: booking.start.addingTimeInterval(TimeInterval(minutes * 60)))
+    }
+
+    func move(_ booking: Booking, to start: Date) throws {
+        let moves = try movePlan(for: booking, to: start)
+        update(booking) { $0.start = start }
         for move in moves {
             update(move.booking) { $0.start = move.newStart }
         }
-        if let sync = sync { sync.move(booking, by: minutes); return }
+        if let sync = sync { sync.move(booking, to: start); return }
         notifyOthers(moves, by: booking)
     }
 

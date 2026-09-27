@@ -7,6 +7,7 @@ struct SudsAndSlotsApp: App {
     @StateObject private var idle = IdleMonitor()
     @StateObject private var confirmer = Confirmer()
     @StateObject private var customExtend = CustomExtend()
+    @StateObject private var rescheduler = Rescheduler()
 
     var body: some Scene {
         WindowGroup {
@@ -19,6 +20,7 @@ struct SudsAndSlotsApp: App {
                 .environmentObject(idle)
                 .environmentObject(confirmer)
                 .environmentObject(customExtend)
+                .environmentObject(rescheduler)
                 .confirmationAlert(confirmer)
                 .background(IdleTouchWatcher(monitor: idle))
                 .preferredColorScheme(.dark)
@@ -126,6 +128,7 @@ extension View {
 struct ContentView: View {
     @EnvironmentObject var store: BookingStore
     @EnvironmentObject var customExtend: CustomExtend
+    @EnvironmentObject var rescheduler: Rescheduler
 
     var body: some View {
         GeometryReader { geo in
@@ -151,6 +154,12 @@ struct ContentView: View {
             }
         }
         .background(Theme.background.ignoresSafeArea())
+        // A second sheet needs its own view on iOS 15.
+        .background(Color.clear.sheet(item: $rescheduler.booking) { booking in
+            RescheduleSheet(booking: booking)
+                .environmentObject(store)
+                .preferredColorScheme(.dark)
+        })
         .sheet(item: $customExtend.booking) { booking in
             ExtendSheet(booking: booking)
                 .environmentObject(store)
