@@ -17,6 +17,8 @@ struct QuickAddSheet: View {
     @State private var uses: Set<Machine> = [.washer]
     @State private var minutes: [Machine: Int] = Dictionary(uniqueKeysWithValues:
         Machine.allCases.map { ($0, $0.defaultMinutes) })
+    /// Set when a "Butt in ahead of…" option is chosen; overrides the chips.
+    @State private var buttInAt: Date?
     /// Wash at the chosen time but put the dryer/rack later, when they're free.
     @State private var dryLater = false
     /// Captured when the sheet opens so the chips don't shift under a finger.
@@ -68,9 +70,9 @@ struct QuickAddSheet: View {
     }
 
     private var laterPlan: LaterPlan? {
-        guard offset != nil, let wash = stages.first, wash.0 == .washer, stages.count > 1 else { return nil }
-        guard let moves = try? store.pushPlan(.leon, start: start, stages: [wash]), moves.isEmpty else { return nil }
-        let washEnd = start.addingTimeInterval(TimeInterval(wash.1 * 60))
+        guard let wash = stages.first, wash.0 == .washer, stages.count > 1, !isFree(base) else { return nil }
+        guard let moves = try? store.pushPlan(.leon, start: base, stages: [wash]), moves.isEmpty else { return nil }
+        let washEnd = base.addingTimeInterval(TimeInterval(wash.1 * 60))
         let rest = Array(stages.dropFirst())
         let first = Self.alignedNow(washEnd)
         for step in 0...(24 * 12) {
@@ -87,8 +89,51 @@ struct QuickAddSheet: View {
     }
 
     private var start: Date {
+        if dryLater { return base }
+        if let buttIn = buttInAt { return buttIn }
         if let offset = offset { return base.addingTimeInterval(TimeInterval(offset * 60)) }
         return nextFree ?? base
+    }
+
+    /// A way to jump the queue: start at `start`, pushing `moves` along.
+    private struct ButtIn: Identifiable {
+        let start: Date
+        let moves: [SessionMove]
+        var id: Date { start }
+
+        /// "Butt in ahead of Leon (washer)" / "…ahead of Leon and Ruby".
+        var title: String {
+            var seen: [Person] = []
+            for move in moves where !seen.contains(move.booking.person) { seen.append(move.booking.person) }
+            guard seen.count > 1 else {
+                return "Butt in ahead of \(moves[0].booking.person.name) (\(moves[0].booking.machine.name.lowercased()))"
+            }
+            let names = seen.map(\.name)
+            return "Butt in ahead of " + names.dropLast().joined(separator: ", ") + " and " + names.last!
+        }
+    }
+
+    /// The distinct ways to butt in over the next 12 hours: starting now, as
+    /// a running load finishes, or at someone's booked start, whichever pushes
+    /// people along (never onto a load that's in). One option per set of
+    /// people moved, at the earliest time that set applies.
+    private var buttIns: [ButtIn] {
+        guard !stages.isEmpty else { return [] }
+        let machines = Set(stages.map(\.0))
+        let horizon = base.addingTimeInterval(12 * 3600)
+        var times: Set<Date> = [base]
+        for booking in store.bookings where machines.contains(booking.machine)
+            && booking.end > base && booking.start < horizon && booking.finishedAt == nil {
+            times.insert(max(booking.isRunning ? booking.end : booking.start, base))
+        }
+        var seen: Set<[UUID]> = []
+        var options: [ButtIn] = []
+        for time in times.sorted() {
+            guard case .shoves(let moves) = outcome(at: time) else { continue }
+            let key = moves.map(\.booking.id).sorted { $0.uuidString < $1.uuidString }
+            if seen.insert(key).inserted { options.append(ButtIn(start: time, moves: moves)) }
+        }
+        return options
     }
 
     var body: some View {
@@ -109,31 +154,40 @@ struct QuickAddSheet: View {
             ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 section("When?") {
-                    HStack(spacing: 8) {
-                        ForEach(offsets, id: \.self) { minutes in
-                            let at = base.addingTimeInterval(TimeInterval(minutes * 60))
-                            let result = stages.isEmpty ? Outcome.free : outcome(at: at)
-                            chip(title: minutes == 0 ? "Now" : "+\(minutes < 60 ? "\(minutes)" : "1 h")",
-                                 subtitle: Self.time(at), selected: offset == minutes,
-                                 marker: Self.marker(result)) { offset = minutes }
+                    let free = offsets.filter { minutes in
+                        stages.isEmpty || isFree(base.addingTimeInterval(TimeInterval(minutes * 60)))
+                    }
+                    if !free.isEmpty {
+                        HStack(spacing: 8) {
+                            ForEach(free, id: \.self) { minutes in
+                                let at = base.addingTimeInterval(TimeInterval(minutes * 60))
+                                chip(title: minutes == 0 ? "Now" : "+\(minutes < 60 ? "\(minutes)" : "1 h")",
+                                     subtitle: Self.time(at), selected: !dryLater && buttInAt == nil && offset == minutes) {
+                                    offset = minutes
+                                    buttInAt = nil
+                                    dryLater = false
+                                }
+                            }
+                            // Keep chips the same width however many are free.
+                            ForEach(0..<(offsets.count - free.count), id: \.self) { _ in Color.clear.frame(height: 1) }
                         }
                     }
                     if let suggestion = suggestion {
-                        chip(title: "Next free", subtitle: Self.dayAndTime(suggestion), selected: offset == nil,
-                             highlight: true) { offset = nil }
-                            // Green edge even when not chosen, so it reads as the way out.
-                            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .stroke(BookingBar.startGreen, lineWidth: offset == nil ? 0 : 2.5))
-                            .frame(maxWidth: 200)
+                        chip(title: "Next free", subtitle: Self.dayAndTime(suggestion),
+                             selected: !dryLater && buttInAt == nil && offset == nil, highlight: true) {
+                            offset = nil
+                            buttInAt = nil
+                            dryLater = false
+                        }
+                        // Green edge even when not chosen, so it reads as the way out.
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(BookingBar.startGreen, lineWidth: buttInAt == nil && offset == nil ? 0 : 2.5))
+                        .frame(maxWidth: 200)
                     }
-                    if offsets.contains(where: { minutes in
-                        let at = base.addingTimeInterval(TimeInterval(minutes * 60))
-                        return !stages.isEmpty && Self.marker(outcome(at: at)) != nil
-                    }) {
-                        key
+                    ForEach(buttIns) { option in
+                        buttInButton(option)
                     }
-                    warning(for: current)
-                    if busy, let plan = laterPlan {
+                    if let plan = laterPlan {
                         laterCard(plan)
                     }
                 }
@@ -172,14 +226,79 @@ struct QuickAddSheet: View {
         .animation(.easeOut(duration: 0.2), value: blocker(at: base)?.id)
         .background(Color(.systemBackground).ignoresSafeArea())
         .confirmationAlert(confirmer)
-        .onChange(of: offset) { _ in dryLater = false }
-        .onChange(of: uses) { _ in dryLater = false }
+        .onChange(of: uses) { _ in dryLater = false; buttInAt = nil }
         .onAppear {
             base = Self.alignedNow()
             // Busy right now? Start on the next free time; shoving people
             // along should be a deliberate choice.
             if case .free = outcome(at: base) {} else { offset = nil }
         }
+    }
+
+    private func isFree(_ start: Date) -> Bool {
+        if case .free = outcome(at: start) { return true }
+        return false
+    }
+
+    /// Orange "Butt in ahead of…" button; when chosen it opens up to show
+    /// exactly who moves where.
+    private func buttInButton(_ option: ButtIn) -> some View {
+        let selected = buttInAt == option.start
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        return Button {
+            buttInAt = selected ? nil : option.start
+            dryLater = false
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Image(systemName: selected ? "checkmark.circle.fill" : "arrow.uturn.right.circle.fill")
+                    Text(option.title)
+                        .font(.system(size: 16, weight: .bold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Spacer(minLength: 6)
+                    Text(Self.dayAndTime(option.start))
+                        .font(.system(size: 14, weight: .semibold))
+                        .monospacedDigit()
+                }
+                if !selected {
+                    // Whose slots, so two options with the same names differ.
+                    Text("Moves " + option.moves.map {
+                        "\($0.booking.person.name) \(Booking.timeFormatter.string(from: $0.booking.start))"
+                    }.joined(separator: " · "))
+                        .font(.system(size: 12, weight: .semibold))
+                        .opacity(0.75)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+                if selected {
+                    ForEach(option.moves, id: \.booking.id) { move in
+                        Text("• " + detailLine(move))
+                            .font(.system(size: 13, weight: .medium))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Text("They'll each be told their slot has moved.")
+                        .font(.system(size: 12, weight: .semibold))
+                        .opacity(0.8)
+                }
+            }
+            .foregroundColor(.black)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.orange, in: shape)
+            .overlay(shape.stroke(selected ? Color.white : Color.clear, lineWidth: 3))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func detailLine(_ move: SessionMove) -> String {
+        let whose = "\(move.booking.person.name)'s \(move.booking.machine.name.lowercased())"
+        let from = Booking.timeFormatter.string(from: move.booking.start)
+        if move.deferred {
+            return "\(whose) (\(from)) would run past 10 PM, so it moves to \(nextAfternoon(move))"
+        }
+        return "\(whose) moves from \(from) to \(move.newTimeRange)"
     }
 
     @ViewBuilder
@@ -266,12 +385,15 @@ struct QuickAddSheet: View {
     private func laterCard(_ plan: LaterPlan) -> some View {
         let rest = plan.rest.map { $0.0.name.lowercased() }.joined(separator: " then ")
         let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
-        return Button { dryLater.toggle() } label: {
+        return Button {
+            dryLater.toggle()
+            if dryLater { buttInAt = nil }
+        } label: {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: dryLater ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 20))
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Wash at \(Self.time(start)), \(rest) later at \(Self.time(plan.restStart))")
+                    Text("Wash now (\(Self.time(base))), \(rest) later at \(Self.time(plan.restStart))")
                         .font(.system(size: 16, weight: .bold))
                     Text(plan.washerNeededInGap
                          ? "Someone needs the washer before then, so take your washing out as soon as it finishes (\(Self.time(plan.washEnd)))."
