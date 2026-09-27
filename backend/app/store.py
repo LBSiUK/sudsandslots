@@ -109,13 +109,15 @@ class Booking:
 class Move:
     booking: Booking  # as it was before moving
     new_start: datetime
+    deferred: bool = False  # the night rule sent it to the next afternoon
 
     @property
     def new_end(self) -> datetime:
         return self.new_start + timedelta(minutes=self.booking.minutes)
 
     def to_json(self) -> dict:
-        return {"booking": self.booking.to_json(), "newStart": fmt_time(self.new_start)}
+        return {"booking": self.booking.to_json(), "newStart": fmt_time(self.new_start),
+                "deferred": self.deferred}
 
 
 # ---------------------------------------------------------------- store
@@ -172,6 +174,51 @@ class Store:
 
     def time_range(self, start: datetime, end: datetime) -> str:
         return f"{self.local_time(start)} – {self.local_time(end)}"
+
+    def night_deferral(self, start: datetime, original: datetime) -> datetime | None:
+        """Night rule: a push that would start a booking at or after 10 PM, or in
+        the small hours of a later day, sends it to 12:00 PM the next day."""
+        local = start.astimezone(self.tz)
+        if local.hour >= 22:
+            noon = (local + timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
+            return noon.astimezone(UTC)
+        if local.hour < 12 and local.date() > original.astimezone(self.tz).date():
+            return local.replace(hour=12, minute=0, second=0, microsecond=0).astimezone(UTC)
+        return None
+
+    def cascade(self, placed: list[tuple[datetime, datetime]], candidates: list[Booking],
+                block_started: bool) -> list[Move]:
+        """Push `candidates` (one machine, start order) off everything placed so
+        far: one that overlaps moves to when what it overlaps ends, keeping its
+        length (night rule applied); one that doesn't stays and counts as placed.
+        Mirrors BookingStore.cascade in the app."""
+        placed = list(placed)
+        moves: list[Move] = []
+
+        def overlap_end(start: datetime, end: datetime) -> datetime | None:
+            ends = [e for (s, e) in placed if start < e and s < end]
+            return max(ends) if ends else None
+
+        for b in candidates:
+            first = overlap_end(b.start, b.end)
+            if first is None:
+                placed.append((b.start, b.end))
+                continue
+            if block_started and (b.started_at or b.finished_at):
+                raise self._clash(b)
+            length = timedelta(minutes=b.minutes)
+            start, deferred = first, False
+            while True:
+                later = self.night_deferral(start, b.start)
+                if later is not None:
+                    start, deferred = later, True
+                end = overlap_end(start, start + length)
+                if end is None:
+                    break
+                start = end
+            moves.append(Move(b, start, deferred))
+            placed.append((start, start + length))
+        return moves
 
     @property
     def version(self) -> int:
@@ -245,16 +292,8 @@ class Store:
         for other in others:
             if other.overlaps(booking.start, booking.end) and (other.started_at or other.finished_at):
                 raise self._clash(other)
-        end, moves = booking.end, []
-        for nxt in sorted((o for o in others if o.end > booking.start), key=lambda o: o.start):
-            if not nxt.start < end:
-                break
-            if nxt.started_at or nxt.finished_at:
-                raise self._clash(nxt)
-            move = Move(nxt, end)
-            moves.append(move)
-            end = move.new_end
-        return booking, moves
+        later = sorted((o for o in others if o.end > booking.start), key=lambda o: o.start)
+        return booking, self.cascade([(booking.start, booking.end)], later, block_started=True)
 
     def _parse_chain(self, person: Any, start: Any, stages: Any) -> tuple[str, datetime, dict[str, int]]:
         if stages is None:
@@ -317,8 +356,13 @@ class Store:
     def _apply_move(self, m: Move, reason: str, now: datetime) -> int:
         """Store a move and the moved person's notification; returns the notification id."""
         self._write(replace(m.booking, start=m.new_start, updated_at=now))
-        message = (f"Your {MACHINE_NAMES[m.booking.machine].lower()} slot moved to"
-                   f" {self.time_range(m.new_start, m.new_end)} because {reason}.")
+        slot = f"Your {MACHINE_NAMES[m.booking.machine].lower()} slot"
+        if m.deferred:
+            day = m.new_start.astimezone(self.tz).strftime("%A")
+            message = (f"{slot} would have run past 10 PM after {reason}, so it's moved to"
+                       f" {day} {self.time_range(m.new_start, m.new_end)}.")
+        else:
+            message = f"{slot} moved to {self.time_range(m.new_start, m.new_end)} because {reason}."
         cur = self.db.execute(
             "INSERT INTO notifications (person, kind, message, booking_id, old_start, new_start, created_at)"
             " VALUES (?,?,?,?,?,?,?)",
@@ -371,16 +415,9 @@ class Store:
         minutes = self._minutes(minutes)
         b = self.get(booking_id)
         end = b.end + timedelta(minutes=minutes)
-        moves: list[Move] = []
         later = [o for o in self._all(b.machine) if o.id.upper() != b.id.upper() and o.start >= b.start]
         later.sort(key=lambda o: o.start)
-        for nxt in later:
-            if not nxt.start < end:
-                break
-            move = Move(nxt, end)
-            moves.append(move)
-            end = move.new_end
-        return b, moves
+        return b, self.cascade([(b.start, end)], later, block_started=False)
 
     def extend(self, booking_id: str, minutes: Any) -> tuple[int, Booking, list[Move], list[dict]]:
         with self.lock:

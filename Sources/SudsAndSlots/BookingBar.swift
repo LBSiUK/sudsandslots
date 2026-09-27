@@ -59,11 +59,22 @@ struct PendingBarAction {
         case .extend(let minutes):
             let newEnd = booking.end.addingTimeInterval(TimeInterval(minutes * 60))
             var lines = ["Ends at \(Booking.timeFormatter.string(from: newEnd)) instead."]
-            lines += moves.map { "\($0.booking.person.name)'s slot moves to \($0.newTimeRange) and they'll be told." }
+            lines += moves.map { move in
+                move.deferred
+                    ? "\(move.booking.person.name)'s slot would run past 10 PM, so it moves to \(nextAfternoon(move)) and they'll be told."
+                    : "\(move.booking.person.name)'s slot moves to \(move.newTimeRange) and they'll be told."
+            }
             lines += ["", "⚠️ " + extendWarning]
             return lines.joined(separator: "\n")
         }
     }
+}
+
+/// "tomorrow 12:00 PM – 2:00 PM" (or the weekday) for a night-deferred move.
+func nextAfternoon(_ move: SessionMove) -> String {
+    let day = Calendar.current.isDateInTomorrow(move.newStart) ? "tomorrow"
+        : CalendarView.weekday.string(from: move.newStart)
+    return "\(day) \(move.newTimeRange)"
 }
 
 extension Confirmer {

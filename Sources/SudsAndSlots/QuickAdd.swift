@@ -121,6 +121,12 @@ struct QuickAddSheet: View {
                                 .stroke(BookingBar.startGreen, lineWidth: offset == nil ? 0 : 2.5))
                             .frame(maxWidth: 170)
                     }
+                    if offsets.contains(where: { minutes in
+                        let at = base.addingTimeInterval(TimeInterval(minutes * 60))
+                        return !stages.isEmpty && Self.marker(outcome(at: at)) != nil
+                    }) {
+                        key
+                    }
                     warning(for: current)
                     if busy, let plan = laterPlan {
                         laterCard(plan)
@@ -187,8 +193,9 @@ struct QuickAddSheet: View {
             EmptyView()
         case .shoves(let moves):
             Label {
-                Text("This shoves along " + moves.map { "\($0.booking.person.name) (to \(Self.time($0.newStart)))" }
-                    .joined(separator: ", ") + ". They'll be told.")
+                Text("This shoves along " + moves.map {
+                    "\($0.booking.person.name) (to \($0.deferred ? nextAfternoon($0) : Self.time($0.newStart)))"
+                }.joined(separator: ", ") + ". They'll be told.")
             } icon: {
                 Image(systemName: "exclamationmark.triangle.fill")
             }
@@ -283,7 +290,12 @@ struct QuickAddSheet: View {
                 return "\(machine.name): \(stage.timeRange)"
             }
             if !moves.isEmpty {
-                lines += [""] + moves.map { "⚠️ \($0.booking.person.name)'s \($0.booking.machine.name.lowercased()) moves to \($0.newTimeRange) and they'll be told." }
+                lines += [""] + moves.map { move in
+                    let whose = "\(move.booking.person.name)'s \(move.booking.machine.name.lowercased())"
+                    return move.deferred
+                        ? "⚠️ \(whose) would run past 10 PM, so it moves to \(nextAfternoon(move)) and they'll be told."
+                        : "⚠️ \(whose) moves to \(move.newTimeRange) and they'll be told."
+                }
             }
             confirmer.ask("book \(person.name) in", detail: lines.joined(separator: "\n"),
                           confirmTitle: moves.isEmpty ? "Book" : "Book & Shove") {
@@ -429,23 +441,49 @@ struct QuickAddSheet: View {
             }
             .frame(height: 50)
         }
-        .buttonStyle(TileButtonStyle(selected: selected, tint: highlight ? BookingBar.startGreen : Color.accentColor))
-        // A small corner badge: orange = would shove someone, red = blocked.
+        .buttonStyle(StatusChipStyle(selected: selected,
+                                     fill: marker?.fill ?? (selected ? (highlight ? BookingBar.startGreen : Color.accentColor) : Theme.control),
+                                     text: marker?.text ?? .white))
+        // Corner icon too, so it doesn't rely on colour alone.
         .overlay(alignment: .topTrailing) {
             if let marker = marker {
                 Image(systemName: marker.symbol)
                     .font(.system(size: 12, weight: .bold))
-                    .foregroundColor(marker.color)
+                    .foregroundColor(marker.text)
                     .padding(4)
             }
         }
-        .opacity(marker == .blocked && !selected ? 0.4 : 1)
+    }
+
+    /// Red square = in use, yellow square = you'd push someone along.
+    private var key: some View {
+        HStack(spacing: 16) {
+            keyItem(Marker.blocked, "Someone else is already using a machine")
+            keyItem(Marker.shoves, "You'll push someone else along")
+        }
+        .font(.system(size: 13, weight: .medium))
+        .foregroundColor(Theme.secondaryText)
+    }
+
+    private func keyItem(_ marker: Marker, _ text: String) -> some View {
+        HStack(spacing: 6) {
+            RoundedRectangle(cornerRadius: 3)
+                .fill(marker.fill)
+                .frame(width: 14, height: 14)
+            Text(text)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
     }
 
     private enum Marker {
         case shoves, blocked
         var symbol: String { self == .shoves ? "arrow.right.circle.fill" : "xmark.circle.fill" }
-        var color: Color { self == .shoves ? .orange : .red }
+        /// Darkened red for taken, yellow for push-along.
+        var fill: Color {
+            self == .shoves ? Color(red: 0.95, green: 0.78, blue: 0.15) : Color(red: 0.45, green: 0.07, blue: 0.08)
+        }
+        var text: Color { self == .shoves ? .black : Color.white.opacity(0.85) }
     }
 
     private static func marker(_ outcome: Outcome) -> Marker? {
@@ -464,5 +502,22 @@ struct QuickAddSheet: View {
 
     static func time(_ date: Date) -> String {
         Booking.timeFormatter.string(from: date)
+    }
+}
+
+/// A tile filled with a given colour; a white edge marks the chosen one.
+struct StatusChipStyle: ButtonStyle {
+    var selected: Bool
+    var fill: Color
+    var text: Color
+
+    func makeBody(configuration: Configuration) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        configuration.label
+            .foregroundColor(text)
+            .frame(maxWidth: .infinity)
+            .background(fill, in: shape)
+            .overlay(shape.stroke(selected ? Color.white : Theme.controlStroke, lineWidth: selected ? 3 : 1))
+            .opacity(configuration.isPressed ? 0.7 : 1)
     }
 }

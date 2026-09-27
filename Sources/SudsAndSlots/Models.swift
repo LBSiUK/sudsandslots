@@ -178,6 +178,8 @@ struct SessionMove {
     /// The booking as it was before moving.
     let booking: Booking
     let newStart: Date
+    /// Pushed past 10 PM, so moved to the next afternoon instead.
+    var deferred = false
 
     var newEnd: Date { newStart.addingTimeInterval(TimeInterval(booking.minutes * 60)) }
     var newTimeRange: String {
@@ -450,17 +452,10 @@ final class BookingStore: ObservableObject {
             guard stage.end > Date() else { throw BookingError.inPast }
             at = stage.end
             chain.append(stage)
-            var end = stage.end
             let others = bookings
                 .filter { $0.machine == machine && $0.end > stage.start }
                 .sorted { $0.start < $1.start }
-            for other in others {
-                guard other.start < end else { break }
-                if other.startedAt != nil || other.finishedAt != nil { throw BookingError.clash(other) }
-                let move = SessionMove(booking: other, newStart: end)
-                moves.append(move)
-                end = move.newEnd
-            }
+            moves += try Self.cascade(placed: [(stage.start, stage.end)], candidates: others, blockStarted: true)
         }
         return (chain, moves)
     }
@@ -482,18 +477,64 @@ final class BookingStore: ObservableObject {
     /// session ran `minutes` longer. Each is pushed to start when the one before
     /// it now ends, keeping its length, until the chain no longer overlaps.
     func extensionPlan(for booking: Booking, by minutes: Int) -> [SessionMove] {
-        var end = booking.end.addingTimeInterval(TimeInterval(minutes * 60))
-        var moves: [SessionMove] = []
+        let end = booking.end.addingTimeInterval(TimeInterval(minutes * 60))
         let later = bookings
             .filter { $0.machine == booking.machine && $0.id != booking.id && $0.start >= booking.start }
             .sorted { $0.start < $1.start }
-        for next in later {
-            guard next.start < end else { break }
-            let move = SessionMove(booking: next, newStart: end)
-            moves.append(move)
-            end = move.newEnd
+        return (try? Self.cascade(placed: [(booking.start, end)], candidates: later, blockStarted: false)) ?? []
+    }
+
+    /// Pushes `candidates` (one machine, in start order) off everything placed
+    /// so far: a candidate that overlaps is moved to when what it overlaps
+    /// ends, keeping its length; one that doesn't stays put and counts as
+    /// placed. Night rule: a push that would start it at or after 10 PM, or in
+    /// the small hours of a later day, sends it to 12:00 PM the next day
+    /// instead (then it's checked for overlaps again). Mirrors the backend.
+    static func cascade(placed initial: [(Date, Date)], candidates: [Booking],
+                        blockStarted: Bool) throws -> [SessionMove] {
+        var placed = initial
+        var moves: [SessionMove] = []
+        func overlapEnd(_ start: Date, _ end: Date) -> Date? {
+            placed.filter { start < $0.1 && $0.0 < end }.map { $0.1 }.max()
+        }
+        for booking in candidates {
+            guard let firstEnd = overlapEnd(booking.start, booking.end) else {
+                placed.append((booking.start, booking.end))
+                continue
+            }
+            if blockStarted && (booking.startedAt != nil || booking.finishedAt != nil) {
+                throw BookingError.clash(booking)
+            }
+            let length = TimeInterval(booking.minutes * 60)
+            var start = firstEnd
+            var deferred = false
+            while true {
+                if let later = nightDeferral(start, original: booking.start) {
+                    start = later
+                    deferred = true
+                }
+                guard let end = overlapEnd(start, start.addingTimeInterval(length)) else { break }
+                start = end
+            }
+            moves.append(SessionMove(booking: booking, newStart: start, deferred: deferred))
+            placed.append((start, start.addingTimeInterval(length)))
         }
         return moves
+    }
+
+    /// Where the night rule sends a pushed start, or nil if it's fine.
+    static func nightDeferral(_ start: Date, original: Date) -> Date? {
+        let cal = Calendar.current
+        let hour = cal.component(.hour, from: start)
+        let day = cal.startOfDay(for: start)
+        if hour >= 22 {
+            let next = cal.date(byAdding: .day, value: 1, to: day)!
+            return cal.date(bySettingHour: 12, minute: 0, second: 0, of: next)
+        }
+        if hour < 12 && day > cal.startOfDay(for: original) {
+            return cal.date(bySettingHour: 12, minute: 0, second: 0, of: day)
+        }
+        return nil
     }
 
     func extend(_ booking: Booking, by minutes: Int) {

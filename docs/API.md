@@ -33,7 +33,7 @@ Optional. If the server runs with `SUDS_TOKEN=<secret>`, every request except
 
 **Move** (a booking pushed later by someone's extension)
 ```json
-{ "booking": <Booking as it was before>, "newStart": "2026-09-27T22:30:00Z" }
+{ "booking": <Booking as it was before>, "newStart": "2026-09-27T22:30:00Z", "deferred": false }
 ```
 
 **Notification**
@@ -70,6 +70,12 @@ Codes: `no_person`, `nothing_chosen`, `in_past` (all 422), `clash` (409),
   An overlap with a booking that has started or finished is still a `clash` 409.
   Stages are placed first, then pushes are computed per machine; pushes never
   cross machines. Without `push` (default false) any overlap is a 409 as before.
+- Night rule (applies to every push, extend or shove): if a pushed booking would
+  start at or after 10 PM local time, or in the small hours of a later day, it
+  goes to 12:00 PM the next day instead (same length), then carries on pushing
+  anything it now overlaps. Such moves have `"deferred": true`, and the
+  notification says it would have run past 10 PM. Bookings that don't overlap
+  anything placed stay where they are.
 - Extend by N minutes: later bookings on the same machine (start ≥ this start)
   that would overlap get pushed to start when the previous one now ends, keeping
   their length, until the chain no longer overlaps. Every moved booking's person

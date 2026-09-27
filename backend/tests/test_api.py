@@ -496,3 +496,45 @@ def test_push_is_per_machine_across_stages(client, book):
 def test_push_still_rejects_in_past(client, book):
     r = _chain(client, "chain", "leon", at(-3), ("washer", 60), push=True)
     assert (r.status_code, r.json()["error"]) == (422, "in_past")
+
+
+# -- night rule: pushed past 10 PM -> next day 12:00 PM (London, BST = UTC+1)
+
+def test_extend_past_10pm_defers_to_next_afternoon_and_says_so(client, book):
+    leon = book("leon", "2026-09-27T18:30:00Z", ("washer", 90))[0]    # 7:30-9:00 PM
+    ruby = book("ruby", "2026-09-27T20:00:00Z", ("washer", 60))[0]    # 9:00-10:00 PM
+    sam = book("sam", "2026-09-28T11:30:00Z", ("washer", 60))[0]      # tomorrow 12:30-1:30 PM
+    r = client.post(f"{API}/bookings/{leon['id']}/extend", json={"minutes": 60})
+    assert r.status_code == 200
+    moves = r.json()["moves"]
+    # Ruby would start at 10 PM, so she goes to 12:00 PM tomorrow (11:00Z) instead,
+    # and that pushes Sam along to when she finishes (12:00Z = 1 PM), not deferred.
+    assert [(m["booking"]["id"], m["newStart"], m["deferred"]) for m in moves] == [
+        (ruby["id"], "2026-09-28T11:00:00Z", True),
+        (sam["id"], "2026-09-28T12:00:00Z", False),
+    ]
+    notes = {n["person"]: n["message"] for n in client.get(f"{API}/notifications").json()["notifications"]}
+    assert notes["ruby"] == ("Your washer slot would have run past 10 PM after Leon extended their "
+                             "session, so it's moved to Monday 12:00 PM – 1:00 PM.")
+    assert notes["sam"] == "Your washer slot moved to 1:00 PM – 2:00 PM because Leon extended their session."
+
+
+def test_push_into_small_hours_defers_too(client, book):
+    book("ruby", "2026-09-27T20:30:00Z", ("washer", 60))                # 9:30-10:30 PM, not started
+    plan = client.post(f"{API}/bookings/chain-plan", json={
+        "person": "sam", "start": "2026-09-27T20:00:00Z",               # 9:00 PM for 4 h -> 1:00 AM
+        "stages": [{"machine": "washer", "minutes": 240}], "push": True,
+    })
+    assert plan.status_code == 200, plan.text
+    [move] = plan.json()["moves"]
+    assert move["deferred"] is True and move["newStart"] == "2026-09-28T11:00:00Z"
+
+
+def test_push_before_10pm_is_not_deferred(client, book):
+    ruby = book("ruby", "2026-09-27T17:00:00Z", ("washer", 60))[0]      # 6-7 PM
+    plan = client.post(f"{API}/bookings/chain-plan", json={
+        "person": "sam", "start": "2026-09-27T16:30:00Z",               # 5:30-7:00 PM
+        "stages": [{"machine": "washer", "minutes": 90}], "push": True,
+    }).json()
+    assert [(m["booking"]["id"], m["newStart"], m["deferred"]) for m in plan["moves"]] == [
+        (ruby["id"], "2026-09-27T18:00:00Z", False)]                    # 7:00 PM

@@ -90,7 +90,9 @@ struct WireBooking: Codable {
 struct WireMove: Decodable {
     var booking: WireBooking
     var newStart: Date
-    var move: SessionMove { SessionMove(booking: booking.booking, newStart: newStart) }
+    /// True when the night rule sent it to the next afternoon. Older servers omit it.
+    var deferred: Bool?
+    var move: SessionMove { SessionMove(booking: booking.booking, newStart: newStart, deferred: deferred ?? false) }
 }
 
 /// A stored "your slot moved" message from the server.

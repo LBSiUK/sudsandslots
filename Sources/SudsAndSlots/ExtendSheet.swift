@@ -89,8 +89,8 @@ struct ExtendSheet: View {
                                 Circle().fill(move.booking.person.color).frame(width: 10, height: 10)
                                 Text(move.booking.person.name)
                                 Spacer()
-                                Text(move.newTimeRange)
-                                    .foregroundColor(.secondary)
+                                Text(move.deferred ? nextAfternoon(move) : move.newTimeRange)
+                                    .foregroundColor(move.deferred ? .orange : .secondary)
                                     .monospacedDigit()
                             }
                         }
