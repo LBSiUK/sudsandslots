@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 ROOT="$(pwd)"
 SRC="$ROOT/Sources/SudsAndSlots"
 PKG="$ROOT/packaging"
-BUILD="$ROOT/build"
+BUILD="${BUILD_DIR:-$ROOT/build}"   # BUILD_DIR lets parallel builds use their own folder
 APP="$BUILD/SudsAndSlots.app"
 
 VERSION="0.1"
@@ -26,7 +26,7 @@ xcrun --sdk iphoneos swiftc \
     -swift-version 5 \
     -O \
     -parse-as-library \
-    "$SRC"/*.swift \
+    $(find "$SRC" -name "*.swift") \
     -o "$APP/SudsAndSlots"
 
 echo "==> Assembling app bundle"

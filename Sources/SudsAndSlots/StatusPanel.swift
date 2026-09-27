@@ -7,6 +7,7 @@ struct StatusPanel: View {
     @EnvironmentObject var store: BookingStore
     @EnvironmentObject var form: BookingForm
     @State private var showingBooking = false
+    @State private var showingQuickAdd = false
     /// Refreshed every 15 s for "who's next" and "in 5 min". The per-second
     /// timers tick on their own, so an open menu isn't rebuilt every second.
     @State private var now = Date()
@@ -223,21 +224,41 @@ struct StatusPanel: View {
 
     // MARK: - Book
 
+    /// Quick add (the fast path, big and white) beside Book (the full form).
     private var bookButton: some View {
-        Button {
-            showingBooking = true
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "plus")
-                    .font(.system(size: 28, weight: .bold))
-                Text("Book a Slot")
-                    .font(.system(size: 21, weight: .semibold))
+        HStack(spacing: 10) {
+            Button {
+                showingQuickAdd = true
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "bolt.fill")
+                        .font(.system(size: 24, weight: .bold))
+                    Text("Quick add")
+                        .font(.system(size: 21, weight: .semibold))
+                }
+                .foregroundColor(.black)
+                .frame(maxWidth: .infinity, minHeight: 58)
+                .background(Color.white, in: Capsule())
             }
-            .foregroundColor(.black)
-            .frame(maxWidth: .infinity, minHeight: 58)
-            .background(Color.white, in: Capsule())
+            .buttonStyle(.plain)
+            .sheet(isPresented: $showingQuickAdd) {
+                QuickAddSheet()
+                    .environmentObject(store)
+                    .preferredColorScheme(.dark)
+            }
+            Button {
+                showingBooking = true
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 26, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(width: 58, height: 58)
+                    .background(Color.white.opacity(0.16), in: Circle())
+                    .overlay(Circle().stroke(Color.white.opacity(0.3)))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Book a Slot")
         }
-        .buttonStyle(.plain)
     }
 
     // MARK: - Pieces
