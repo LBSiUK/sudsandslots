@@ -19,12 +19,6 @@ func agoLabel(_ minutes: Int) -> String {
     }
 }
 
-/// The choices offered under Extend.
-let extendOptions = [15, 30, 60]
-
-func extendLabel(_ minutes: Int) -> String {
-    minutes < 60 ? "\(minutes) min" : minutes == 60 ? "1 hour" : "\(minutes / 60) h \(minutes % 60) min"
-}
 
 /// A session action waiting for confirmation.
 struct PendingBarAction {
@@ -66,6 +60,7 @@ struct PendingBarAction {
             let newEnd = booking.end.addingTimeInterval(TimeInterval(minutes * 60))
             var lines = ["Ends at \(Booking.timeFormatter.string(from: newEnd)) instead."]
             lines += moves.map { "\($0.booking.person.name)'s slot moves to \($0.newTimeRange) and they'll be told." }
+            lines += ["", "⚠️ " + extendWarning]
             return lines.joined(separator: "\n")
         }
     }
@@ -139,23 +134,16 @@ struct SessionMenuItems: View {
     }
 }
 
-/// "Extend" with its +15 / +30 / +1 hour choices. Later bookings that would
+/// "Extend" with its preset lengths and Custom…. Later bookings that would
 /// overlap get pushed back; the confirmation says who.
 struct ExtendMenu: View {
-    @EnvironmentObject var store: BookingStore
-    @EnvironmentObject var confirmer: Confirmer
     let booking: Booking
-    var title = "Extend"
 
     var body: some View {
         Menu {
-            ForEach(extendOptions, id: \.self) { minutes in
-                Button("+ \(extendLabel(minutes))") {
-                    confirmer.ask(PendingBarAction(action: .extend(minutes: minutes), booking: booking), store: store)
-                }
-            }
+            ExtendMenuItems(booking: booking)
         } label: {
-            Label(title, systemImage: "clock.arrow.circlepath")
+            Label("Extend", systemImage: "clock.arrow.circlepath")
         }
     }
 }

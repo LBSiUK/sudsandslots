@@ -6,7 +6,6 @@ import SwiftUI
 struct StatusPanel: View {
     @EnvironmentObject var store: BookingStore
     @EnvironmentObject var form: BookingForm
-    @EnvironmentObject var confirmer: Confirmer
     @State private var showingBooking = false
     /// Refreshed every 15 s for "who's next" and "in 5 min". The per-second
     /// timers tick on their own, so an open menu isn't rebuilt every second.
@@ -116,11 +115,7 @@ struct StatusPanel: View {
                 cardButtonLabel("Adjust this session", systemImage: "slider.horizontal.3")
             }
             Menu {
-                ForEach(extendOptions, id: \.self) { minutes in
-                    Button("+ \(extendLabel(minutes))") {
-                        confirmer.ask(PendingBarAction(action: .extend(minutes: minutes), booking: booking), store: store)
-                    }
-                }
+                ExtendMenuItems(booking: booking)
             } label: {
                 cardButtonLabel("Extend", systemImage: "clock.arrow.circlepath")
             }

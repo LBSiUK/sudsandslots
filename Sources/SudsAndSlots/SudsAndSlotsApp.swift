@@ -6,6 +6,7 @@ struct SudsAndSlotsApp: App {
     @StateObject private var form = BookingForm()
     @StateObject private var idle = IdleMonitor()
     @StateObject private var confirmer = Confirmer()
+    @StateObject private var customExtend = CustomExtend()
 
     var body: some Scene {
         WindowGroup {
@@ -17,6 +18,7 @@ struct SudsAndSlotsApp: App {
                 .environmentObject(form)
                 .environmentObject(idle)
                 .environmentObject(confirmer)
+                .environmentObject(customExtend)
                 .confirmationAlert(confirmer)
                 .background(IdleTouchWatcher(monitor: idle))
                 .preferredColorScheme(.dark)
@@ -50,6 +52,9 @@ extension View {
 #endif
 
 struct ContentView: View {
+    @EnvironmentObject var store: BookingStore
+    @EnvironmentObject var customExtend: CustomExtend
+
     var body: some View {
         GeometryReader { geo in
             // Side by side when there's room (landscape iPad); stacked otherwise.
@@ -74,5 +79,10 @@ struct ContentView: View {
             }
         }
         .background(Theme.background.ignoresSafeArea())
+        .sheet(item: $customExtend.booking) { booking in
+            ExtendSheet(booking: booking)
+                .environmentObject(store)
+                .preferredColorScheme(.dark)
+        }
     }
 }
