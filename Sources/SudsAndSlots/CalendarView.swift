@@ -74,10 +74,10 @@ struct CalendarView: View {
 struct TimelineGrid: View {
     @EnvironmentObject var store: BookingStore
     @EnvironmentObject var idle: IdleMonitor
+    @EnvironmentObject var confirmer: Confirmer
     let day: Date
     let bookings: [Booking]
 
-    @State private var pending: PendingBarAction?
     @State private var viewportHeight: CGFloat = 0
     /// Hour last scrolled to automatically; cleared by any touch so the next
     /// idle spell scrolls again.
@@ -122,16 +122,6 @@ struct TimelineGrid: View {
                 .onChange(of: day) { _ in scroll(proxy, to: defaultHour(), animated: true) }
                 .onReceive(idleCheck) { _ in autoScrollIfIdle(proxy) }
             }
-        }
-        .alert(ConfirmCopy.title, isPresented: Binding(get: { pending != nil },
-                                                        set: { if !$0 { pending = nil } }),
-               presenting: pending) { pending in
-            Button(pending.buttonTitle, role: pending.action == .cancel ? .destructive : nil) {
-                perform(pending)
-            }
-            Button("No", role: .cancel) {}
-        } message: { pending in
-            Text(pending.message)
         }
     }
 
@@ -226,7 +216,8 @@ struct TimelineGrid: View {
         let height = min(max(bottom - top - 3, Self.minBarHeight), max(nextTop - top - 3, 16))
 
         return BookingBar(booking: booking, width: width, height: height) { action in
-            pending = PendingBarAction(action: action, booking: booking)
+            let pending = PendingBarAction(action: action, booking: booking)
+            confirmer.ask(pending.message, confirmTitle: pending.buttonTitle) { perform(pending) }
         }
         .offset(x: labelWidth + 10, y: top + 1.5)
         .transition(.opacity.combined(with: .scale(scale: 0.95)))

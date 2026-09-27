@@ -4,7 +4,7 @@ enum BarAction {
     case start, finish, cancel
 }
 
-/// A bar button tap waiting for "Are you sure you want to:" confirmation.
+/// A bar button tap waiting for confirmation.
 struct PendingBarAction {
     let action: BarAction
     let booking: Booking
@@ -29,10 +29,6 @@ struct PendingBarAction {
             return "Cancel \(name)'s booking (\(booking.timeRange))?"
         }
     }
-}
-
-enum ConfirmCopy {
-    static let title = "Are you sure you want to:"
 }
 
 /// One booking on the timeline:

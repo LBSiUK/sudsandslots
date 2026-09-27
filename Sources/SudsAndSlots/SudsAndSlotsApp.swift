@@ -5,6 +5,7 @@ struct SudsAndSlotsApp: App {
     @StateObject private var store = BookingStore()
     @StateObject private var form = BookingForm()
     @StateObject private var idle = IdleMonitor()
+    @StateObject private var confirmer = Confirmer()
 
     var body: some Scene {
         WindowGroup {
@@ -15,6 +16,7 @@ struct SudsAndSlotsApp: App {
                 .environmentObject(store)
                 .environmentObject(form)
                 .environmentObject(idle)
+                .environmentObject(confirmer)
                 .background(IdleTouchWatcher(monitor: idle))
                 .preferredColorScheme(.dark)
                 #if DEBUG
@@ -71,5 +73,6 @@ struct ContentView: View {
             }
         }
         .background(Theme.background.ignoresSafeArea())
+        .overlay(ConfirmOverlay())
     }
 }

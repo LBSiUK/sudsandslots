@@ -3,9 +3,8 @@ import SwiftUI
 struct SidebarView: View {
     @EnvironmentObject var store: BookingStore
     @EnvironmentObject var form: BookingForm
+    @EnvironmentObject var confirmer: Confirmer
     @State private var error: BookingError?
-    /// Checked and waiting for the "Are you sure" confirmation.
-    @State private var pendingBooking: Booking?
 
     private let durations = [30, 60, 90, 120, 150, 180]
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 3)
@@ -155,7 +154,9 @@ struct SidebarView: View {
     private var bookButton: some View {
         Button {
             do {
-                pendingBooking = try store.check(form.person, start: form.startDate, minutes: form.durationMinutes)
+                let booking = try store.check(form.person, start: form.startDate, minutes: form.durationMinutes)
+                confirmer.ask("Book \(booking.person.name) in for \(Self.longDay.string(from: booking.start)), \(booking.timeRange)?",
+                              confirmTitle: "Book") { confirmBooking(booking) }
             } catch let e as BookingError {
                 showError(e)
             } catch {}
@@ -167,23 +168,15 @@ struct SidebarView: View {
                 .background(Color.white, in: Capsule())
         }
         .buttonStyle(.plain)
-        // Kept on the button rather than beside the error alert: iOS 15 only
-        // honours one .alert per view.
-        .alert(ConfirmCopy.title, isPresented: Binding(get: { pendingBooking != nil },
-                                                        set: { if !$0 { pendingBooking = nil } }),
-               presenting: pendingBooking) { booking in
-            Button("Book") {
-                do {
-                    try store.book(booking.person, start: booking.start, minutes: booking.minutes)
-                    UINotificationFeedbackGenerator().notificationOccurred(.success)
-                } catch let e as BookingError {
-                    showError(e)
-                } catch {}
-            }
-            Button("No", role: .cancel) {}
-        } message: { booking in
-            Text("Book \(booking.person.name) in for \(Self.longDay.string(from: booking.start)), \(booking.timeRange)?")
-        }
+    }
+
+    private func confirmBooking(_ booking: Booking) {
+        do {
+            try store.book(booking.person, start: booking.start, minutes: booking.minutes)
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        } catch let e as BookingError {
+            showError(e)
+        } catch {}
     }
 
     private func showError(_ e: BookingError) {
