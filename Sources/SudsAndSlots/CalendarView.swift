@@ -77,7 +77,7 @@ struct TimelineGrid: View {
     let day: Date
     let bookings: [Booking]
 
-    @State private var pendingDelete: Booking?
+    @State private var pending: PendingBarAction?
     @State private var viewportHeight: CGFloat = 0
     /// Hour last scrolled to automatically; cleared by any touch so the next
     /// idle spell scrolls again.
@@ -123,13 +123,28 @@ struct TimelineGrid: View {
                 .onReceive(idleCheck) { _ in autoScrollIfIdle(proxy) }
             }
         }
-        .confirmationDialog(deleteTitle, isPresented: Binding(get: { pendingDelete != nil },
-                                                              set: { if !$0 { pendingDelete = nil } }),
-                            titleVisibility: .visible) {
-            Button("Cancel Booking", role: .destructive) {
-                if let b = pendingDelete { withAnimation { store.remove(b) } }
+        .alert(ConfirmCopy.title, isPresented: Binding(get: { pending != nil },
+                                                        set: { if !$0 { pending = nil } }),
+               presenting: pending) { pending in
+            Button(pending.buttonTitle, role: pending.action == .cancel ? .destructive : nil) {
+                perform(pending)
             }
-            Button("Keep It", role: .cancel) {}
+            Button("No", role: .cancel) {}
+        } message: { pending in
+            Text(pending.message)
+        }
+    }
+
+    private func perform(_ pending: PendingBarAction) {
+        switch pending.action {
+        case .start:
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            store.start(pending.booking)
+        case .finish:
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            store.finish(pending.booking)
+        case .cancel:
+            withAnimation { store.remove(pending.booking) }
         }
     }
 
@@ -167,11 +182,6 @@ struct TimelineGrid: View {
         guard autoScrolledTo != target else { return }
         autoScrolledTo = target
         scroll(proxy, to: target, animated: true)
-    }
-
-    private var deleteTitle: String {
-        guard let b = pendingDelete else { return "" }
-        return "Cancel \(b.person.name)'s slot, \(b.timeRange)?"
     }
 
     private var gridLines: some View {
@@ -215,8 +225,8 @@ struct TimelineGrid: View {
             ?? .greatestFiniteMagnitude
         let height = min(max(bottom - top - 3, Self.minBarHeight), max(nextTop - top - 3, 16))
 
-        return BookingBar(booking: booking, width: width, height: height) {
-            pendingDelete = booking
+        return BookingBar(booking: booking, width: width, height: height) { action in
+            pending = PendingBarAction(action: action, booking: booking)
         }
         .offset(x: labelWidth + 10, y: top + 1.5)
         .transition(.opacity.combined(with: .scale(scale: 0.95)))

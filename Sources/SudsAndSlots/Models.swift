@@ -120,7 +120,8 @@ final class BookingStore: ObservableObject {
             .sorted { $0.start < $1.start }
     }
 
-    func book(_ person: Person?, start: Date, minutes: Int) throws {
+    /// The booking that would be made, or the reason it can't be.
+    func check(_ person: Person?, start: Date, minutes: Int) throws -> Booking {
         guard let person = person else { throw BookingError.noPerson }
         let end = start.addingTimeInterval(TimeInterval(minutes * 60))
         // Allow booking the slot that's currently in progress, just not one
@@ -129,7 +130,11 @@ final class BookingStore: ObservableObject {
         if let clash = bookings.first(where: { $0.overlaps(start: start, end: end) }) {
             throw BookingError.clash(clash)
         }
-        bookings.append(Booking(person: person, start: start, minutes: minutes))
+        return Booking(person: person, start: start, minutes: minutes)
+    }
+
+    func book(_ person: Person?, start: Date, minutes: Int) throws {
+        bookings.append(try check(person, start: start, minutes: minutes))
         save()
     }
 

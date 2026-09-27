@@ -1,13 +1,48 @@
 import SwiftUI
 
+enum BarAction {
+    case start, finish, cancel
+}
+
+/// A bar button tap waiting for "Are you sure you want to:" confirmation.
+struct PendingBarAction {
+    let action: BarAction
+    let booking: Booking
+
+    var buttonTitle: String {
+        switch action {
+        case .start: return "Start"
+        case .finish: return "Finish"
+        case .cancel: return "Cancel Booking"
+        }
+    }
+
+    var message: String {
+        let name = booking.person.name
+        switch action {
+        case .start:
+            return "Start \(name)'s wash (\(booking.timeRange))?"
+        case .finish:
+            let elapsed = Date().timeIntervalSince(booking.startedAt ?? Date())
+            return "Mark \(name)'s wash as finished after \(BookingBar.clock(elapsed))?"
+        case .cancel:
+            return "Cancel \(name)'s booking (\(booking.timeRange))?"
+        }
+    }
+}
+
+enum ConfirmCopy {
+    static let title = "Are you sure you want to:"
+}
+
 /// One booking on the timeline:
 /// [Start | running timers + Finished | Done] [Cancel] Name ……… time range
 struct BookingBar: View {
-    @EnvironmentObject var store: BookingStore
     let booking: Booking
     let width: CGFloat
     let height: CGFloat
-    let onCancel: () -> Void
+    /// Called when a button is tapped; the calendar asks for confirmation.
+    let onAction: (BarAction) -> Void
 
     /// Short bars (30-minute slots) get icon-only controls so they still fit.
     private var compact: Bool { height < 30 }
@@ -26,13 +61,10 @@ struct BookingBar: View {
             } else if booking.startedAt != nil {
                 runningTimers
             } else if canStart {
-                pill("Start", systemImage: "play.fill", color: Self.startGreen) {
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                    store.start(booking)
-                }
+                pill("Start", systemImage: "play.fill", color: Self.startGreen) { onAction(.start) }
             }
             if booking.finishedAt == nil {
-                pill("Cancel", systemImage: "xmark", color: Color.black.opacity(0.3), action: onCancel)
+                pill("Cancel", systemImage: "xmark", color: Color.black.opacity(0.3)) { onAction(.cancel) }
             }
             Text(booking.person.name)
                 .font(.system(size: compact ? 14 : 18, weight: .bold, design: .rounded))
@@ -64,10 +96,7 @@ struct BookingBar: View {
                 timer(systemImage: "hourglass",
                       value: remaining >= 0 ? Self.clock(remaining) : "+" + Self.clock(-remaining))
                     .foregroundColor(remaining >= 0 ? .white : Color.yellow)
-                pill("Finished", systemImage: "stop.fill", color: Self.finishRed) {
-                    UINotificationFeedbackGenerator().notificationOccurred(.success)
-                    store.finish(booking)
-                }
+                pill("Finished", systemImage: "stop.fill", color: Self.finishRed) { onAction(.finish) }
             }
             .padding(.leading, compact ? 6 : 10)
             .padding(.trailing, compact ? 2 : 3)
