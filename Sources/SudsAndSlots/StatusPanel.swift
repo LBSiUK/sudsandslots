@@ -139,6 +139,16 @@ struct StatusPanel: View {
                             .font(.system(size: 14, weight: .medium))
                             .opacity(0.85)
                     }
+                    // Who has the rack after this one, so they can plan around it.
+                    if let next = store.upcoming(after: now).first(where: {
+                        $0.machine == booking.machine && $0.id != booking.id
+                    }) {
+                        Text("Next: \(next.person.name), \(whenText(next))")
+                            .font(.system(size: 13, weight: .semibold))
+                            .opacity(0.85)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                    }
                 }
                 Spacer(minLength: 4)
                 Menu {
