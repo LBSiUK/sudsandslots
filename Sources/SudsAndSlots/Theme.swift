@@ -1,9 +1,7 @@
 import SwiftUI
 
 enum Theme {
-    static let background = LinearGradient(
-        colors: [Color(red: 0.16, green: 0.07, blue: 0.30), Color(red: 0.05, green: 0.06, blue: 0.16)],
-        startPoint: .topLeading, endPoint: .bottomTrailing)
+    static let background = Color.black
 
     static let panel = Color.white.opacity(0.06)
     static let panelStroke = Color.white.opacity(0.10)
