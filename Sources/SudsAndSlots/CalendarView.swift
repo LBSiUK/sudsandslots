@@ -86,6 +86,7 @@ struct TimelineGrid: View {
 
     /// First hour of the part of the day that should always fit on screen.
     private static let dayStartHour = 8
+    private static let minBarHeight: CGFloat = 32
     private let labelWidth: CGFloat = 64
     private let topInset: CGFloat = 14
     private let idleCheck = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
@@ -104,10 +105,11 @@ struct TimelineGrid: View {
                         gridLines
                         GeometryReader { geo in
                             let width = geo.size.width - labelWidth - 28
+                            // Drawn first so bars sit on top of the now-line.
+                            nowLine(width: width)
                             ForEach(bookings) { booking in
                                 block(for: booking, width: width)
                             }
-                            nowLine(width: width)
                         }
                     }
                     .frame(height: hourHeight * 24 + topInset * 2)
@@ -207,28 +209,15 @@ struct TimelineGrid: View {
         // Clip to this day so slots that cross midnight show on both days.
         let top = max(y(for: booking.start), topInset)
         let bottom = min(y(for: booking.end), topInset + hourHeight * 24)
-        let height = max(bottom - top - 3, 16)
-        let compact = height < 34
+        // 30-minute slots are too thin for their buttons, so let a bar grow into
+        // the free time below it, but never over the next booking.
+        let nextTop = bookings.first(where: { $0.start >= booking.end }).map { y(for: $0.start) }
+            ?? .greatestFiniteMagnitude
+        let height = min(max(bottom - top - 3, Self.minBarHeight), max(nextTop - top - 3, 16))
 
-        return Button {
+        return BookingBar(booking: booking, width: width, height: height) {
             pendingDelete = booking
-        } label: {
-            HStack {
-                Text(booking.person.name)
-                    .font(.system(size: compact ? 14 : 18, weight: .bold, design: .rounded))
-                Spacer()
-                Text(booking.timeRange)
-                    .font(.system(size: compact ? 13 : 16, weight: .medium))
-                    .monospacedDigit()
-            }
-            .foregroundColor(.white)
-            .padding(.horizontal, 16)
-            .frame(width: width, height: height)
-            .background(booking.person.color, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.white.opacity(0.25)))
-            .shadow(color: .black.opacity(0.3), radius: 6, y: 3)
         }
-        .buttonStyle(.plain)
         .offset(x: labelWidth + 10, y: top + 1.5)
         .transition(.opacity.combined(with: .scale(scale: 0.95)))
     }

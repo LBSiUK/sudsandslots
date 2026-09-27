@@ -25,6 +25,10 @@ struct Booking: Codable, Identifiable, Equatable {
     var person: Person
     var start: Date
     var minutes: Int
+    /// Set when someone taps Start / Finished on the bar. Optional so older
+    /// saved bookings still decode.
+    var startedAt: Date?
+    var finishedAt: Date?
 
     var end: Date { start.addingTimeInterval(TimeInterval(minutes * 60)) }
 
@@ -94,6 +98,16 @@ final class BookingStore: ObservableObject {
             Booking(person: .ruby, start: at(21), minutes: 30),
             Booking(person: .ruby, start: at(9, day: 1), minutes: 120),
         ]
+        // Show every bar state: Izzy's load is done, and Leon has one running
+        // now (clearing any sample booking it would overlap).
+        bookings[0].startedAt = at(8, 2)
+        bookings[0].finishedAt = at(9, 21)
+        let now = Date()
+        let slot = Calendar.current.dateComponents([.hour, .minute], from: now)
+        let running = Booking(person: .leon, start: at(slot.hour!, slot.minute! < 30 ? 0 : 30), minutes: 90,
+                              startedAt: now.addingTimeInterval(-17 * 60 - 42))
+        bookings.removeAll { $0.overlaps(start: running.start, end: running.end) }
+        bookings.append(running)
     }
     #endif
 
@@ -116,6 +130,20 @@ final class BookingStore: ObservableObject {
             throw BookingError.clash(clash)
         }
         bookings.append(Booking(person: person, start: start, minutes: minutes))
+        save()
+    }
+
+    func start(_ booking: Booking) {
+        update(booking) { $0.startedAt = Date(); $0.finishedAt = nil }
+    }
+
+    func finish(_ booking: Booking) {
+        update(booking) { $0.finishedAt = Date() }
+    }
+
+    private func update(_ booking: Booking, _ change: (inout Booking) -> Void) {
+        guard let i = bookings.firstIndex(where: { $0.id == booking.id }) else { return }
+        change(&bookings[i])
         save()
     }
 
