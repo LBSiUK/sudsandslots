@@ -17,16 +17,22 @@ struct PendingBarAction {
         }
     }
 
-    var message: String {
+    var question: String {
         let name = booking.person.name
         switch action {
-        case .start:
-            return "Start \(name)'s wash (\(booking.timeRange))?"
+        case .start: return "start \(name)'s wash"
+        case .finish: return "mark \(name)'s wash as finished"
+        case .cancel: return "cancel \(name)'s booking"
+        }
+    }
+
+    var detail: String {
+        switch action {
         case .finish:
             let elapsed = Date().timeIntervalSince(booking.startedAt ?? Date())
-            return "Mark \(name)'s wash as finished after \(BookingBar.clock(elapsed))?"
-        case .cancel:
-            return "Cancel \(name)'s booking (\(booking.timeRange))?"
+            return "Running for \(BookingBar.clock(elapsed)) · \(booking.timeRange)"
+        case .start, .cancel:
+            return booking.timeRange
         }
     }
 }

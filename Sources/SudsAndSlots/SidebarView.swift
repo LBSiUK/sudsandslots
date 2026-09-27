@@ -155,7 +155,8 @@ struct SidebarView: View {
         Button {
             do {
                 let booking = try store.check(form.person, start: form.startDate, minutes: form.durationMinutes)
-                confirmer.ask("Book \(booking.person.name) in for \(Self.longDay.string(from: booking.start)), \(booking.timeRange)?",
+                confirmer.ask("book \(booking.person.name) in",
+                              detail: "\(Self.longDay.string(from: booking.start)), \(booking.timeRange)",
                               confirmTitle: "Book") { confirmBooking(booking) }
             } catch let e as BookingError {
                 showError(e)
