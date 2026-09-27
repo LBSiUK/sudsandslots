@@ -62,6 +62,27 @@ enum Machine: String, CaseIterable, Codable, Identifiable {
 
     /// Longest estimate the form allows.
     var maxMinutes: Int { self == .rack ? 24 * 60 : 6 * 60 }
+
+    /// The rack goes 1-6 h an hour at a time, then 2 hours at a time to 24 h;
+    /// the machines go in 15-minute steps.
+    private var stops: [Int] {
+        self == .rack
+            ? Array(stride(from: 60, through: 360, by: 60)) + Array(stride(from: 480, through: 1440, by: 120))
+            : Array(stride(from: 15, through: maxMinutes, by: 15))
+    }
+
+    /// The next estimate up (or down) from `minutes`, snapping onto the steps.
+    func step(_ minutes: Int, up: Bool) -> Int {
+        up ? (stops.first { $0 > minutes } ?? stops.last!)
+           : (stops.last { $0 < minutes } ?? stops.first!)
+    }
+
+    func canStep(_ minutes: Int, up: Bool) -> Bool {
+        up ? minutes < stops.last! : minutes > stops.first!
+    }
+
+    /// Long enough that the finish time is worth showing next to the length.
+    func showsEndTime(_ minutes: Int) -> Bool { self == .rack && minutes > 360 }
 }
 
 struct Booking: Codable, Identifiable, Equatable {

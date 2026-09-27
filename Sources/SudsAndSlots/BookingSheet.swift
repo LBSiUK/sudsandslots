@@ -64,6 +64,16 @@ struct BookingSheet: View {
         }
     }
 
+    /// When this machine's stage would end, with the chosen stages back to back.
+    private func stageEnd(_ machine: Machine) -> Date {
+        var at = form.startDate
+        for (m, length) in form.stages {
+            at = at.addingTimeInterval(TimeInterval(length * 60))
+            if m == machine { break }
+        }
+        return at
+    }
+
     private func usageRow(_ machine: Machine) -> some View {
         let using = Binding(get: { form.uses[machine] ?? false }, set: { form.uses[machine] = $0 })
         let minutes = Binding(get: { form.minutes[machine] ?? machine.defaultMinutes },
@@ -87,15 +97,27 @@ struct BookingSheet: View {
             }
             .frame(minHeight: 40)
             if using.wrappedValue {
-                Stepper(value: minutes, in: 15...machine.maxMinutes, step: 15) {
+                Stepper {
                     HStack {
                         Text("Estimated time")
                             .foregroundColor(Theme.secondaryText)
                         Spacer()
-                        Text(extendLabel(minutes.wrappedValue))
-                            .font(.system(size: 16, weight: .semibold))
-                            .monospacedDigit()
+                        VStack(alignment: .trailing, spacing: 0) {
+                            Text(extendLabel(minutes.wrappedValue))
+                                .font(.system(size: 16, weight: .semibold))
+                                .monospacedDigit()
+                            if machine.showsEndTime(minutes.wrappedValue) {
+                                Text("until \(Booking.timeFormatter.string(from: stageEnd(machine)))")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundColor(Theme.secondaryText)
+                                    .monospacedDigit()
+                            }
+                        }
                     }
+                } onIncrement: {
+                    minutes.wrappedValue = machine.step(minutes.wrappedValue, up: true)
+                } onDecrement: {
+                    minutes.wrappedValue = machine.step(minutes.wrappedValue, up: false)
                 }
                 .padding(.leading, 30)
                 .padding(.bottom, 6)

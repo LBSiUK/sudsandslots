@@ -305,14 +305,22 @@ struct QuickAddSheet: View {
             }
             .buttonStyle(.plain)
             HStack(spacing: 0) {
-                stepButton("minus", machine: machine, by: -15, disabled: value <= 15)
-                Text(extendLabel(value))
-                    .font(.system(size: 14, weight: .semibold))
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .frame(maxWidth: .infinity)
-                stepButton("plus", machine: machine, by: 15, disabled: value >= machine.maxMinutes)
+                stepButton("minus", machine: machine, up: false)
+                VStack(spacing: 0) {
+                    Text(extendLabel(value))
+                        .font(.system(size: 14, weight: .semibold))
+                        .monospacedDigit()
+                    if machine.showsEndTime(value) {
+                        Text("until \(Self.time(stageEnd(machine)))")
+                            .font(.system(size: 10, weight: .semibold))
+                            .monospacedDigit()
+                            .opacity(0.8)
+                    }
+                }
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(maxWidth: .infinity)
+                stepButton("plus", machine: machine, up: true)
             }
         }
         .foregroundColor(.white)
@@ -321,10 +329,22 @@ struct QuickAddSheet: View {
         .overlay(shape.stroke(on ? Color.white.opacity(0.9) : Theme.controlStroke, lineWidth: on ? 2 : 1))
     }
 
-    private func stepButton(_ symbol: String, machine: Machine, by delta: Int, disabled: Bool) -> some View {
-        Button {
-            let value = (minutes[machine] ?? machine.defaultMinutes) + delta
-            minutes[machine] = min(max(value, 15), machine.maxMinutes)
+    /// When this machine's stage would end: stages run back to back from the
+    /// chosen start, counting this one as included.
+    private func stageEnd(_ machine: Machine) -> Date {
+        var at = start
+        for m in Machine.allCases where uses.contains(m) || m == machine {
+            at = at.addingTimeInterval(TimeInterval((minutes[m] ?? m.defaultMinutes) * 60))
+            if m == machine { break }
+        }
+        return at
+    }
+
+    private func stepButton(_ symbol: String, machine: Machine, up: Bool) -> some View {
+        let value = minutes[machine] ?? machine.defaultMinutes
+        let disabled = !machine.canStep(value, up: up)
+        return Button {
+            minutes[machine] = machine.step(value, up: up)
             uses.insert(machine)
         } label: {
             Image(systemName: symbol)
@@ -335,7 +355,7 @@ struct QuickAddSheet: View {
         .buttonStyle(.plain)
         .disabled(disabled)
         .opacity(disabled ? 0.35 : 1)
-        .accessibilityLabel("\(delta > 0 ? "Add" : "Remove") 15 minutes on the \(machine.name.lowercased())")
+        .accessibilityLabel("\(up ? "More" : "Less") time on the \(machine.name.lowercased())")
     }
 
     private func chip(title: String, subtitle: String, systemImage: String? = nil, selected: Bool,
