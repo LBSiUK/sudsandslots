@@ -240,6 +240,8 @@ final class SyncService {
             guard let self = self else { return }
             let result = try await client.start(self.serverID(id), at: date)
             self.store?.adoptServerBooking(result.booking.booking)
+            // Starting may also have finished someone's forgotten load.
+            self.refresh()
         }
     }
 
@@ -257,6 +259,20 @@ final class SyncService {
         mutate("extend") { [weak self] client in
             guard let self = self else { return }
             let result = try await client.extend(self.serverID(id), minutes: minutes)
+            self.store?.adoptServerBooking(result.booking.booking)
+            for move in result.moves {
+                var moved = move.booking.booking
+                moved.start = move.newStart
+                self.store?.adoptServerBooking(moved)
+            }
+        }
+    }
+
+    func move(_ booking: Booking, by minutes: Int) {
+        let id = booking.id
+        mutate("move") { [weak self] client in
+            guard let self = self else { return }
+            let result = try await client.move(self.serverID(id), minutes: minutes)
             self.store?.adoptServerBooking(result.booking.booking)
             for move in result.moves {
                 var moved = move.booking.booking

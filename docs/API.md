@@ -76,6 +76,19 @@ Codes: `no_person`, `nothing_chosen`, `in_past` (all 422), `clash` (409),
   anything it now overlaps. Such moves have `"deferred": true`, and the
   notification says it would have run past 10 PM. Bookings that don't overlap
   anything placed stay where they are.
+- The night rule never applies to the drying rack (it's silent; drying
+  overnight is normal).
+- Own stages follow: when extending or moving a booking makes it end later, the
+  same person's back-to-back later stage (a stage on a later machine starting
+  exactly when this one ended, not started) moves to the new end, pushing others
+  on its machine along; and so on down the chain.
+- Nobody is notified about moves caused by their own action.
+- Move along by N minutes: only for bookings that haven't started
+  (`cannot_move` 409 otherwise); the new slot must end after now (`in_past`);
+  bookings it overlaps on its machine are pushed along (night rule applies to
+  them; a started or finished one in the way is a `clash` 409).
+- Starting a booking marks any other load still running on the same machine as
+  finished (someone forgot to press Finished).
 - Extend by N minutes: later bookings on the same machine (start ≥ this start)
   that would overlap get pushed to start when the previous one now ends, keeping
   their length, until the chain no longer overlaps. Every moved booking's person
@@ -94,6 +107,8 @@ Codes: `no_person`, `nothing_chosen`, `in_past` (all 422), `clash` (409),
 | `POST /api/v1/bookings/{id}/finish` | | `{"version", "booking"}` |
 | `GET /api/v1/bookings/{id}/extend-plan?minutes=N` | | `{"moves": [Move]}` |
 | `POST /api/v1/bookings/{id}/extend` | `{"minutes": N}` (1…1440) | `{"version", "booking", "moves": [Move]}` |
+| `GET /api/v1/bookings/{id}/move-plan?minutes=N` | | `{"newStart", "moves": [Move]}` or the error the move would get |
+| `POST /api/v1/bookings/{id}/move` | `{"minutes": N}` (1…1440) | `{"version", "booking", "moves": [Move]}` — "move along": slide a not-started booking later |
 | `DELETE /api/v1/bookings/{id}` | | `{"version"}` |
 | `POST /api/v1/import` | `{"bookings": [Booking]}` | `{"version", "imported": <int>}` — inserts bookings whose id the server doesn't have (existing ids are skipped, never overwritten); for moving an iPad's local data up |
 | `GET /api/v1/notifications?person=leon&unread=1` | | `{"notifications": [Notification]}` newest first |

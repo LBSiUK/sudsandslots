@@ -160,12 +160,14 @@ extension Booking {
 enum BookingError: LocalizedError {
     case noPerson
     case nothingChosen
+    case alreadyStarted
     case inPast
     case clash(Booking)
 
     var errorDescription: String? {
         switch self {
         case .noPerson: return "Pick who's washing first."
+        case .alreadyStarted: return "That session has already started, so it can't be moved."
         case .nothingChosen: return "Say yes to at least one of the washing machine, dryer or drying rack."
         case .inPast:   return "That start time has already passed."
         case .clash(let b): return "That clashes with \(b.person.name)'s \(b.machine.name.lowercased()) slot (\(b.timeRange))."
@@ -435,8 +437,8 @@ final class BookingStore: ObservableObject {
         if let sync = sync {
             // The server notifies the people who were moved.
             sync.bookChain(person: person, start: start, stages: stages, push: true, optimistic: chain)
-        } else if !moves.isEmpty, let first = chain.first {
-            moveNotifier.sessionsMoved(moves, by: first)
+        } else if let first = chain.first {
+            notifyOthers(moves, by: first)
         }
     }
 
@@ -465,7 +467,17 @@ final class BookingStore: ObservableObject {
         let earliest = Date().addingTimeInterval(-Booking.maxBackdate)
         let at = max(date, earliest)
         update(booking) { $0.startedAt = at; $0.finishedAt = nil }
+        // Someone else's load still marked running on this machine was clearly
+        // taken out and never marked Finished (the server does the same).
+        for other in forgottenLoads(before: booking) {
+            update(other) { $0.finishedAt = max(at, other.startedAt ?? at) }
+        }
         sync?.start(booking, at: at)
+    }
+
+    /// Other people's loads still marked running on this booking's machine.
+    func forgottenLoads(before booking: Booking) -> [Booking] {
+        bookings.filter { $0.machine == booking.machine && $0.id != booking.id && $0.isRunning }
     }
 
     func finish(_ booking: Booking) {
@@ -481,7 +493,59 @@ final class BookingStore: ObservableObject {
         let later = bookings
             .filter { $0.machine == booking.machine && $0.id != booking.id && $0.start >= booking.start }
             .sorted { $0.start < $1.start }
-        return (try? Self.cascade(placed: [(booking.start, end)], candidates: later, blockStarted: false)) ?? []
+        let pushed = (try? Self.cascade(placed: [(booking.start, end)], candidates: later, blockStarted: false)) ?? []
+        return pushed + ((try? followOns(of: booking, newEnd: end)) ?? [])
+    }
+
+    /// A person's back-to-back later stage (their dryer straight after their
+    /// wash, the rack after that) follows when the stage before it now ends
+    /// later, pushing others on its machine along. Mirrors the backend.
+    func followOns(of booking: Booking, newEnd: Date) throws -> [SessionMove] {
+        let order = Machine.allCases.firstIndex(of: booking.machine)!
+        guard let next = bookings.first(where: {
+            $0.person == booking.person && $0.start == booking.end
+                && Machine.allCases.firstIndex(of: $0.machine)! > order
+                && $0.startedAt == nil && $0.finishedAt == nil
+        }), newEnd > next.start else { return [] }
+        let end = newEnd.addingTimeInterval(TimeInterval(next.minutes * 60))
+        let others = bookings
+            .filter { $0.machine == next.machine && $0.id != next.id && $0.end > newEnd }
+            .sorted { $0.start < $1.start }
+        return [SessionMove(booking: next, newStart: newEnd)]
+            + (try Self.cascade(placed: [(newEnd, end)], candidates: others, blockStarted: true))
+            + (try followOns(of: next, newEnd: end))
+    }
+
+    /// Move along: slide a not-yet-started booking `minutes` later. Later
+    /// bookings it now overlaps on its machine are pushed along (night rule
+    /// for them), and the person's own next stage follows. Throws if it has
+    /// started, would end in the past, or would land on a load that's in.
+    func movePlan(for booking: Booking, by minutes: Int) throws -> [SessionMove] {
+        guard booking.startedAt == nil, booking.finishedAt == nil else { throw BookingError.alreadyStarted }
+        let start = booking.start.addingTimeInterval(TimeInterval(minutes * 60))
+        let end = start.addingTimeInterval(TimeInterval(booking.minutes * 60))
+        guard end > Date() else { throw BookingError.inPast }
+        let others = bookings
+            .filter { $0.machine == booking.machine && $0.id != booking.id && $0.end > start }
+            .sorted { $0.start < $1.start }
+        return try Self.cascade(placed: [(start, end)], candidates: others, blockStarted: true)
+            + followOns(of: booking, newEnd: end)
+    }
+
+    func move(_ booking: Booking, by minutes: Int) throws {
+        let moves = try movePlan(for: booking, by: minutes)
+        update(booking) { $0.start = $0.start.addingTimeInterval(TimeInterval(minutes * 60)) }
+        for move in moves {
+            update(move.booking) { $0.start = move.newStart }
+        }
+        if let sync = sync { sync.move(booking, by: minutes); return }
+        notifyOthers(moves, by: booking)
+    }
+
+    /// Local mode: tell people about moves, but not the person who caused them.
+    private func notifyOthers(_ moves: [SessionMove], by actor: Booking) {
+        let others = moves.filter { $0.booking.person != actor.person }
+        if !others.isEmpty { moveNotifier.sessionsMoved(others, by: actor) }
     }
 
     /// Pushes `candidates` (one machine, in start order) off everything placed
@@ -509,7 +573,8 @@ final class BookingStore: ObservableObject {
             var start = firstEnd
             var deferred = false
             while true {
-                if let later = nightDeferral(start, original: booking.start) {
+                // The rack is silent and drying overnight is normal: no night rule.
+                if booking.machine != .rack, let later = nightDeferral(start, original: booking.start) {
                     start = later
                     deferred = true
                 }
@@ -546,7 +611,7 @@ final class BookingStore: ObservableObject {
         // A server tells the people whose sessions moved itself.
         if let sync = sync { sync.extend(booking, by: minutes); return }
         guard let extended = bookings.first(where: { $0.id == booking.id }) else { return }
-        if !moves.isEmpty { moveNotifier.sessionsMoved(moves, by: extended) }
+        notifyOthers(moves, by: extended)
     }
 
     private func update(_ booking: Booking, _ change: (inout Booking) -> Void) {

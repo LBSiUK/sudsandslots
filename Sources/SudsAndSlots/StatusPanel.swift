@@ -6,6 +6,7 @@ import SwiftUI
 struct StatusPanel: View {
     @EnvironmentObject var store: BookingStore
     @EnvironmentObject var form: BookingForm
+    @EnvironmentObject var confirmer: Confirmer
     @State private var showingBooking = false
     @State private var showingQuickAdd = false
     @State private var showingServer = false
@@ -104,7 +105,7 @@ struct StatusPanel: View {
                     }
                 }
                 .padding(.top, 2)
-                adjustButton(for: booking)
+                actionButtons(for: booking)
             }
         } else if let booking = store.due(on: machine, at: now) {
             card(color: booking.person.color) {
@@ -113,7 +114,7 @@ struct StatusPanel: View {
                 Text("Not started yet · ends \(Self.until(booking.end, from: now))")
                     .font(.system(size: 14, weight: .medium))
                     .opacity(0.85)
-                adjustButton(for: booking)
+                actionButtons(for: booking)
             }
         } else {
             card(color: Color.white.opacity(0.08)) {
@@ -176,36 +177,69 @@ struct StatusPanel: View {
         }
     }
 
-    /// "Adjust this session" (Start / Finished / Extend / Cancel) beside a
-    /// direct "Extend session" menu.
-    private func adjustButton(for booking: Booking) -> some View {
-        HStack(spacing: 10) {
-            Menu {
-                SessionMenuItems(booking: booking)
-            } label: {
-                cardButtonLabel("Adjust this session", systemImage: "slider.horizontal.3")
+    /// One button per action, only the ones that make sense right now:
+    /// running → Finished, Extend, Cancel; not started → Start (tap = now,
+    /// hold = started earlier), Extend, Move along, Cancel.
+    private func actionButtons(for booking: Booking) -> some View {
+        HStack(spacing: 8) {
+            if booking.canStart {
+                Menu {
+                    Section("Already running? Started…") {
+                        ForEach(backdateOptions, id: \.self) { minutes in
+                            Button("\(agoLabel(minutes)) (\(SessionMenuItems.clockTime(minutesAgo: minutes)))") {
+                                ask(.start(minutesAgo: minutes), booking)
+                            }
+                        }
+                    }
+                } label: {
+                    actionTile("Start", systemImage: "play.fill", fill: BookingBar.startGreen)
+                } primaryAction: {
+                    ask(.start(minutesAgo: 0), booking)
+                }
+                .accessibilityHint("Hold for started earlier")
             }
-            Menu {
-                ExtendMenuItems(booking: booking)
-            } label: {
-                cardButtonLabel("Extend", systemImage: "clock.arrow.circlepath")
+            if booking.isRunning {
+                Button { ask(.finish, booking) } label: {
+                    actionTile("Finished", systemImage: "stop.fill", fill: BookingBar.finishRed)
+                }
+                .buttonStyle(.plain)
             }
-            .frame(maxWidth: 104)
-            .accessibilityLabel("Extend session")
+            if booking.finishedAt == nil {
+                Menu { ExtendMenuItems(booking: booking) } label: {
+                    actionTile("Extend", systemImage: "clock.arrow.circlepath")
+                }
+            }
+            if booking.startedAt == nil && booking.finishedAt == nil {
+                Menu { MoveAlongItems(booking: booking) } label: {
+                    actionTile("Move along", systemImage: "arrow.right.to.line")
+                }
+            }
+            Button { ask(.cancel, booking) } label: {
+                actionTile("Cancel", systemImage: "xmark")
+            }
+            .buttonStyle(.plain)
         }
         .padding(.top, 6)
     }
 
-    private func cardButtonLabel(_ title: String, systemImage: String) -> some View {
-        Label(title, systemImage: systemImage)
-            .font(.system(size: 15, weight: .semibold))
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
-            .foregroundColor(.white)
-            .padding(.horizontal, 8)
-            .frame(maxWidth: .infinity, minHeight: 40)
-            .background(Color.black.opacity(0.3), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white.opacity(0.7)))
+    private func ask(_ action: BarAction, _ booking: Booking) {
+        confirmer.ask(PendingBarAction(action: action, booking: booking), store: store)
+    }
+
+    private func actionTile(_ title: String, systemImage: String, fill: Color = Color.black.opacity(0.3)) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        return VStack(spacing: 3) {
+            Image(systemName: systemImage)
+                .font(.system(size: 17, weight: .bold))
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .foregroundColor(.white)
+        .frame(maxWidth: .infinity, minHeight: 50)
+        .background(fill, in: shape)
+        .overlay(shape.stroke(Color.white.opacity(0.7)))
     }
 
     private func freeUntil(on machine: Machine) -> String {

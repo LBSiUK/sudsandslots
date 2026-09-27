@@ -538,3 +538,68 @@ def test_push_before_10pm_is_not_deferred(client, book):
     }).json()
     assert [(m["booking"]["id"], m["newStart"], m["deferred"]) for m in plan["moves"]] == [
         (ruby["id"], "2026-09-27T18:00:00Z", False)]                    # 7:00 PM
+
+
+# -- move along + edge cases (London is BST, UTC+1)
+
+def test_move_along_pushes_next_and_notifies_them_not_me(client, book):
+    leon = book("leon", "2026-09-27T14:00:00Z", ("washer", 60))[0]     # 3-4 PM
+    ruby = book("ruby", "2026-09-27T15:00:00Z", ("washer", 60))[0]     # 4-5 PM
+    plan = client.get(f"{API}/bookings/{leon['id']}/move-plan", params={"minutes": 30}).json()
+    assert plan["newStart"] == "2026-09-27T14:30:00Z"
+    assert [(m["booking"]["id"], m["newStart"]) for m in plan["moves"]] == [(ruby["id"], "2026-09-27T15:30:00Z")]
+    r = client.post(f"{API}/bookings/{leon['id']}/move", json={"minutes": 30})
+    assert r.status_code == 200 and r.json()["booking"]["start"] == "2026-09-27T14:30:00Z"
+    notes = client.get(f"{API}/notifications").json()["notifications"]
+    assert [n["person"] for n in notes] == ["ruby"]
+    assert "Leon moved their session along" in notes[0]["message"]
+
+
+def test_cannot_move_started_or_into_the_past_or_onto_a_running_load(client, book, clock):
+    # All booked from noon UTC (1 PM BST), then time moves on.
+    running = book("sam", "2026-09-27T12:30:00Z", ("washer", 60))[0]   # 12:30-13:30Z
+    early = book("ruby", "2026-09-27T12:00:00Z", ("washer", 30))[0]    # 12:00-12:30Z, just before Sam
+    gone = book("leon", "2026-09-27T12:00:00Z", ("dryer", 30))[0]      # 12:00-12:30Z
+    clock.advance(minutes=40)                                           # 12:40Z
+    client.post(f"{API}/bookings/{running['id']}/start")
+    r = client.post(f"{API}/bookings/{running['id']}/move", json={"minutes": 15})
+    assert r.status_code == 409 and r.json()["error"] == "cannot_move"
+    # Leon's dryer slot ended at 12:30Z; +5 min still ends in the past.
+    r = client.post(f"{API}/bookings/{gone['id']}/move", json={"minutes": 5})
+    assert r.status_code == 422 and r.json()["error"] == "in_past"
+    # Ruby's missed slot moved 30 min would land on Sam's running load.
+    r = client.post(f"{API}/bookings/{early['id']}/move", json={"minutes": 30})
+    assert r.status_code == 409 and r.json()["error"] == "clash"
+    assert client.post(f"{API}/bookings/{early['id']}/move", json={"minutes": 0}).status_code == 422
+
+
+def test_own_dryer_follows_the_wash_and_pushes_others(client, book):
+    wash, dry = book("leon", "2026-09-27T14:00:00Z", ("washer", 60), ("dryer", 60))   # wash 3-4, dry 4-5 PM
+    izzy = book("izzy", "2026-09-27T16:00:00Z", ("dryer", 60))[0]                      # dryer 5-6 PM
+    r = client.post(f"{API}/bookings/{wash['id']}/extend", json={"minutes": 30})
+    assert r.status_code == 200
+    got = [(m["booking"]["id"], m["newStart"]) for m in r.json()["moves"]]
+    assert got == [(dry["id"], "2026-09-27T15:30:00Z"), (izzy["id"], "2026-09-27T16:30:00Z")]
+    # Leon isn't told about his own dryer; Izzy is.
+    assert [n["person"] for n in client.get(f"{API}/notifications").json()["notifications"]] == ["izzy"]
+
+
+def test_rack_is_exempt_from_the_night_rule(client, book):
+    leon = book("leon", "2026-09-27T18:00:00Z", ("rack", 180))[0]      # 7-10 PM
+    ruby = book("ruby", "2026-09-27T21:00:00Z", ("rack", 360))[0]      # 10 PM-4 AM
+    moves = client.get(f"{API}/bookings/{leon['id']}/extend-plan", params={"minutes": 60}).json()["moves"]
+    assert [(m["booking"]["id"], m["newStart"], m["deferred"]) for m in moves] == [
+        (ruby["id"], "2026-09-27T22:00:00Z", False)]                   # 11 PM, stays late
+
+
+def test_starting_finishes_a_forgotten_load_on_the_same_machine(client, book, clock):
+    old = book("sam", "2026-09-27T12:00:00Z", ("washer", 60))[0]       # 12:00-13:00Z
+    mine = book("leon", "2026-09-27T13:00:00Z", ("washer", 60))[0]     # 13:00-14:00Z
+    dryer = book("izzy", "2026-09-27T12:00:00Z", ("dryer", 120))[0]
+    client.post(f"{API}/bookings/{old['id']}/start")
+    client.post(f"{API}/bookings/{dryer['id']}/start")
+    clock.advance(hours=1, minutes=5)                                   # Sam never pressed Finished
+    assert client.post(f"{API}/bookings/{mine['id']}/start").status_code == 200
+    by_id = {b["id"]: b for b in listed(client)}
+    assert by_id[old["id"]]["finishedAt"] == "2026-09-27T13:05:00Z"    # Sam's wash marked finished
+    assert by_id[dryer["id"]]["finishedAt"] is None                    # Izzy's dryer untouched

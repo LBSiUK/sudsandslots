@@ -5,7 +5,12 @@ enum BarAction: Equatable {
     case start(minutesAgo: Int)
     case finish, cancel
     case extend(minutes: Int)
+    /// Slide the session later, pushing whoever's after it along.
+    case moveAlong(minutes: Int)
 }
+
+/// The choices offered under Move along.
+let moveOptions = [15, 30, 45, 60, 120]
 
 /// "Started earlier" choices, up to the 4-hour limit.
 let backdateOptions = [15, 30, 45, 60, 90, 120, 180, 240]
@@ -31,6 +36,7 @@ struct PendingBarAction {
         case .finish: return "Finish"
         case .cancel: return "Cancel Booking"
         case .extend: return "Extend"
+        case .moveAlong: return "Move"
         }
     }
 
@@ -42,28 +48,34 @@ struct PendingBarAction {
         case .finish: return "mark \(whose) session as finished"
         case .cancel: return "cancel \(whose) booking"
         case .extend(let minutes): return "extend \(whose) session by \(extendLabel(minutes))"
+        case .moveAlong(let minutes): return "move \(whose) session along by \(extendLabel(minutes))"
         }
     }
 
     /// `moves` are the sessions an extension would push later (empty otherwise).
-    func detail(moves: [SessionMove]) -> String {
+    func detail(moves: [SessionMove], forgotten: [Booking] = []) -> String {
         switch action {
         case .finish:
             let elapsed = Date().timeIntervalSince(booking.startedAt ?? Date())
             return "Running for \(BookingBar.clock(elapsed)) · \(booking.timeRange)"
+        case .start where !forgotten.isEmpty:
+            let names = forgotten.map { "\($0.person.name)'s" }.joined(separator: " and ")
+            return "\(booking.timeRange)\n\n\(names) load is still marked as running on the \(booking.machine.name.lowercased()), so it'll be marked finished."
         case .start(let ago) where ago > 0:
             let at = Date().addingTimeInterval(TimeInterval(-ago * 60))
             return "Started at \(Booking.timeFormatter.string(from: at)) · booked \(booking.timeRange)"
         case .start, .cancel:
             return booking.timeRange
+        case .moveAlong(let minutes):
+            let start = booking.start.addingTimeInterval(TimeInterval(minutes * 60))
+            let end = start.addingTimeInterval(TimeInterval(booking.minutes * 60))
+            var lines = ["Now \(Booking.timeFormatter.string(from: start)) – \(Booking.timeFormatter.string(from: end))."]
+            lines += moves.map { Self.moveLine($0, actor: booking.person) }
+            return lines.joined(separator: "\n")
         case .extend(let minutes):
             let newEnd = booking.end.addingTimeInterval(TimeInterval(minutes * 60))
             var lines = ["Ends at \(Booking.timeFormatter.string(from: newEnd)) instead."]
-            lines += moves.map { move in
-                move.deferred
-                    ? "\(move.booking.person.name)'s slot would run past 10 PM, so it moves to \(nextAfternoon(move)) and they'll be told."
-                    : "\(move.booking.person.name)'s slot moves to \(move.newTimeRange) and they'll be told."
-            }
+            lines += moves.map { Self.moveLine($0, actor: booking.person) }
             lines += ["", "⚠️ " + extendWarning]
             return lines.joined(separator: "\n")
         }
@@ -77,14 +89,39 @@ func nextAfternoon(_ move: SessionMove) -> String {
     return "\(day) \(move.newTimeRange)"
 }
 
+extension PendingBarAction {
+    /// One line per moved session: other people are told, your own next stage
+    /// just follows.
+    static func moveLine(_ move: SessionMove, actor: Person?) -> String {
+        let name = move.booking.person.name
+        let what = move.booking.machine.name.lowercased()
+        if move.booking.person == actor {
+            return "Your \(what) follows, now \(move.newTimeRange)."
+        }
+        if move.deferred {
+            return "\(name)'s \(what) would run past 10 PM, so it moves to \(nextAfternoon(move)) and they'll be told."
+        }
+        return "\(name)'s \(what) moves to \(move.newTimeRange) and they'll be told."
+    }
+}
+
 extension Confirmer {
     /// Ask "Are you sure…" for a Start / Finish / Cancel choice, then do it.
     func ask(_ pending: PendingBarAction, store: BookingStore) {
         var moves: [SessionMove] = []
-        if case .extend(let minutes) = pending.action {
+        var forgotten: [Booking] = []
+        switch pending.action {
+        case .extend(let minutes):
             moves = store.extensionPlan(for: pending.booking, by: minutes)
+        case .moveAlong(let minutes):
+            moves = (try? store.movePlan(for: pending.booking, by: minutes)) ?? []
+        case .start:
+            forgotten = store.forgottenLoads(before: pending.booking)
+        default:
+            break
         }
-        ask(pending.question, detail: pending.detail(moves: moves), confirmTitle: pending.buttonTitle,
+        ask(pending.question, detail: pending.detail(moves: moves, forgotten: forgotten),
+            confirmTitle: pending.buttonTitle,
             destructive: pending.action == .cancel) {
             switch pending.action {
             case .start(let ago):
@@ -98,6 +135,13 @@ extension Confirmer {
             case .extend(let minutes):
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 withAnimation { store.extend(pending.booking, by: minutes) }
+            case .moveAlong(let minutes):
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                withAnimation {
+                    do { try store.move(pending.booking, by: minutes) } catch let e as BookingError {
+                        store.syncError = e.errorDescription
+                    } catch {}
+                }
             }
         }
     }
@@ -131,6 +175,9 @@ struct SessionMenuItems: View {
         if booking.finishedAt == nil {
             ExtendMenu(booking: booking)
         }
+        if booking.startedAt == nil && booking.finishedAt == nil {
+            MoveAlongMenu(booking: booking)
+        }
         Button(role: .destructive) { ask(.cancel) } label: {
             Label("Cancel Booking", systemImage: "xmark")
         }
@@ -155,6 +202,41 @@ struct ExtendMenu: View {
             ExtendMenuItems(booking: booking)
         } label: {
             Label("Extend", systemImage: "clock.arrow.circlepath")
+        }
+    }
+}
+
+/// "Move along" with the lengths that are actually possible (not onto a load
+/// that's in, not into the past). Whoever's after it gets pushed along.
+struct MoveAlongMenu: View {
+    let booking: Booking
+
+    var body: some View {
+        Menu {
+            MoveAlongItems(booking: booking)
+        } label: {
+            Label("Move along", systemImage: "arrow.right.to.line")
+        }
+    }
+}
+
+struct MoveAlongItems: View {
+    @EnvironmentObject var store: BookingStore
+    @EnvironmentObject var confirmer: Confirmer
+    let booking: Booking
+
+    var body: some View {
+        let possible = moveOptions.filter { (try? store.movePlan(for: booking, by: $0)) != nil }
+        if possible.isEmpty {
+            Text("Can't move: the next slot is taken by a load that's already in")
+        }
+        ForEach(possible, id: \.self) { minutes in
+            let pushes = (try? store.movePlan(for: booking, by: minutes))?.contains { $0.booking.person != booking.person } ?? false
+            Button {
+                confirmer.ask(PendingBarAction(action: .moveAlong(minutes: minutes), booking: booking), store: store)
+            } label: {
+                Label("+ \(extendLabel(minutes))", systemImage: pushes ? "arrow.right.circle" : "clock")
+            }
         }
     }
 }

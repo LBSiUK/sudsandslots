@@ -293,6 +293,11 @@ final class APIClient {
         return try await send(r, as: Moves.self).moves.map(\.move)
     }
 
+    func move(_ id: UUID, minutes: Int) async throws -> Extended {
+        struct Body: Encodable { var minutes: Int }
+        return try await send(request("POST", "/bookings/\(id.uuidString)/move"), body: Body(minutes: minutes), as: Extended.self)
+    }
+
     func extend(_ id: UUID, minutes: Int) async throws -> Extended {
         struct Body: Encodable { var minutes: Int }
         return try await send(request("POST", "/bookings/\(id.uuidString)/extend"), body: Body(minutes: minutes), as: Extended.self)

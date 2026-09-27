@@ -209,7 +209,8 @@ class Store:
             length = timedelta(minutes=b.minutes)
             start, deferred = first, False
             while True:
-                later = self.night_deferral(start, b.start)
+                # The rack is silent and drying overnight is normal: no night rule.
+                later = None if b.machine == "rack" else self.night_deferral(start, b.start)
                 if later is not None:
                     start, deferred = later, True
                 end = overlap_end(start, start + length)
@@ -349,13 +350,16 @@ class Store:
                     self._write(b)
                 for m in moves:
                     reason = f"{made[0].person.capitalize()} quick-added {QUICK_ADD_WHAT[m.booking.machine]}"
-                    notes.append(self._apply_move(m, reason, now))
+                    notes.append(self._apply_move(m, reason, now, actor=made[0].person))
                 version = self._bump()
-            return version, made, moves, [self.notification(i) for i in notes]
+            return version, made, moves, [self.notification(i) for i in notes if i is not None]
 
-    def _apply_move(self, m: Move, reason: str, now: datetime) -> int:
-        """Store a move and the moved person's notification; returns the notification id."""
+    def _apply_move(self, m: Move, reason: str, now: datetime, actor: str | None = None) -> int | None:
+        """Store a move and the moved person's notification (none if they're the
+        one who caused it); returns the notification id."""
         self._write(replace(m.booking, start=m.new_start, updated_at=now))
+        if m.booking.person == actor:
+            return None
         slot = f"Your {MACHINE_NAMES[m.booking.machine].lower()} slot"
         if m.deferred:
             day = m.new_start.astimezone(self.tz).strftime("%A")
@@ -387,6 +391,11 @@ class Store:
             when = now if at is None else parse_time(at, "at")
             when = max(when, now - MAX_BACKDATE)
             b = replace(b, started_at=when, finished_at=None, updated_at=now)
+            # Someone else's load still marked running on this machine was
+            # clearly taken out and never marked Finished: finish it now.
+            for other in self._all(b.machine):
+                if other.id.upper() != b.id.upper() and other.started_at and not other.finished_at:
+                    self._write(replace(other, finished_at=max(when, other.started_at), updated_at=now))
             return self._save(b), b
 
     def finish(self, booking_id: str) -> tuple[int, Booking]:
@@ -417,7 +426,7 @@ class Store:
         end = b.end + timedelta(minutes=minutes)
         later = [o for o in self._all(b.machine) if o.id.upper() != b.id.upper() and o.start >= b.start]
         later.sort(key=lambda o: o.start)
-        return b, self.cascade([(b.start, end)], later, block_started=False)
+        return b, self.cascade([(b.start, end)], later, block_started=False) + self.follow_ons(b, end)
 
     def extend(self, booking_id: str, minutes: Any) -> tuple[int, Booking, list[Move], list[dict]]:
         with self.lock:
@@ -429,9 +438,59 @@ class Store:
                 self.db.execute("BEGIN")
                 self._write(extended)
                 for m in moves:
-                    notes.append(self._apply_move(m, f"{extended.person.capitalize()} extended their session", now))
+                    notes.append(self._apply_move(m, f"{extended.person.capitalize()} extended their session", now,
+                                                  actor=extended.person))
                 version = self._bump()
-            return version, extended, moves, [self.notification(i) for i in notes]
+            return version, extended, moves, [self.notification(i) for i in notes if i is not None]
+
+    def follow_ons(self, b: Booking, new_end: datetime) -> list[Move]:
+        """A person's back-to-back later stage (their dryer straight after their
+        wash, the rack after that) follows when the stage before it now ends
+        later, pushing others on its machine along."""
+        order = MACHINES.index(b.machine)
+        nxt = next((o for o in self._all() if o.person == b.person and o.start == b.end
+                    and MACHINES.index(o.machine) > order
+                    and not o.started_at and not o.finished_at), None)
+        if nxt is None or new_end <= nxt.start:
+            return []
+        start, end = new_end, new_end + timedelta(minutes=nxt.minutes)
+        others = sorted((o for o in self._all(nxt.machine)
+                         if o.id.upper() != nxt.id.upper() and o.end > start), key=lambda o: o.start)
+        return ([Move(nxt, start)] + self.cascade([(start, end)], others, block_started=True)
+                + self.follow_ons(nxt, end))
+
+    # -- move along
+
+    def move_plan(self, booking_id: str, minutes: Any) -> tuple[Booking, datetime, list[Move]]:
+        """Slide a not-yet-started booking `minutes` later; later bookings on the
+        machine that it now overlaps are pushed along (night rule applies)."""
+        minutes = self._minutes(minutes)
+        b = self.get(booking_id)
+        if b.started_at or b.finished_at:
+            raise ApiError("cannot_move", "That session has already started, so it can't be moved.", 409)
+        new_start = b.start + timedelta(minutes=minutes)
+        new_end = new_start + timedelta(minutes=b.minutes)
+        if new_end <= self.now():
+            raise ApiError("in_past", "That would put it entirely in the past.", 422)
+        others = [o for o in self._all(b.machine) if o.id.upper() != b.id.upper() and o.end > new_start]
+        others.sort(key=lambda o: o.start)
+        return b, new_start, (self.cascade([(new_start, new_end)], others, block_started=True)
+                              + self.follow_ons(b, new_end))
+
+    def move(self, booking_id: str, minutes: Any) -> tuple[int, Booking, list[Move], list[dict]]:
+        with self.lock:
+            b, new_start, moves = self.move_plan(booking_id, minutes)
+            now = self.now()
+            moved = replace(b, start=new_start, updated_at=now)
+            notes = []
+            with self.db:
+                self.db.execute("BEGIN")
+                self._write(moved)
+                for m in moves:
+                    notes.append(self._apply_move(m, f"{moved.person.capitalize()} moved their session along", now,
+                                                  actor=moved.person))
+                version = self._bump()
+            return version, moved, moves, [self.notification(i) for i in notes if i is not None]
 
     # -- delete / import
 

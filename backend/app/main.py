@@ -17,7 +17,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .store import ApiError, Store
+from .store import ApiError, Store, fmt_time
 
 log = logging.getLogger("suds")
 
@@ -221,6 +221,19 @@ def create_app(
     async def extend(booking_id: str, request: Request):
         data = await body(request)
         v, b, moves, notes = store.extend(booking_id, data.get("minutes"))
+        changed(v)
+        delivery.send(notes)
+        return {"version": v, "booking": b.to_json(), "moves": [m.to_json() for m in moves]}
+
+    @app.get("/api/v1/bookings/{booking_id}/move-plan")
+    async def move_plan(booking_id: str, minutes: str | None = None):
+        _, new_start, moves = store.move_plan(booking_id, minutes)
+        return {"newStart": fmt_time(new_start), "moves": [m.to_json() for m in moves]}
+
+    @app.post("/api/v1/bookings/{booking_id}/move")
+    async def move(booking_id: str, request: Request):
+        data = await body(request)
+        v, b, moves, notes = store.move(booking_id, data.get("minutes"))
         changed(v)
         delivery.send(notes)
         return {"version": v, "booking": b.to_json(), "moves": [m.to_json() for m in moves]}
