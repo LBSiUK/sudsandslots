@@ -4,6 +4,7 @@ import SwiftUI
 struct SudsAndSlotsApp: App {
     @StateObject private var store = BookingStore()
     @StateObject private var form = BookingForm()
+    @StateObject private var idle = IdleMonitor()
 
     var body: some Scene {
         WindowGroup {
@@ -13,6 +14,8 @@ struct SudsAndSlotsApp: App {
                 #endif
                 .environmentObject(store)
                 .environmentObject(form)
+                .environmentObject(idle)
+                .background(IdleTouchWatcher(monitor: idle))
                 .preferredColorScheme(.dark)
                 #if DEBUG
                 .onAppear(perform: forceLandscapeForScreenshots)

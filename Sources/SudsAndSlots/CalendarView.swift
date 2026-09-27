@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 struct CalendarView: View {
@@ -68,35 +69,57 @@ struct CalendarView: View {
     }()
 }
 
-/// The scrollable 24-hour column with bookings laid over it.
+/// The scrollable 24-hour column with bookings laid over it. Hours are sized
+/// so 8 AM to midnight exactly fills the visible area.
 struct TimelineGrid: View {
     @EnvironmentObject var store: BookingStore
+    @EnvironmentObject var idle: IdleMonitor
     let day: Date
     let bookings: [Booking]
 
     @State private var pendingDelete: Booking?
+    @State private var viewportHeight: CGFloat = 0
+    /// Hour last scrolled to automatically; cleared by any touch so the next
+    /// idle spell scrolls again.
+    @State private var autoScrolledTo: Int?
+    @State private var lastSeenInteraction = Date.distantPast
 
-    private let hourHeight: CGFloat = 56
+    /// First hour of the part of the day that should always fit on screen.
+    private static let dayStartHour = 8
     private let labelWidth: CGFloat = 64
     private let topInset: CGFloat = 14
+    private let idleCheck = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
+
+    private var hourHeight: CGFloat {
+        let visibleHours = CGFloat(24 - Self.dayStartHour)
+        return max((viewportHeight - topInset * 2) / visibleHours, 24)
+    }
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                ZStack(alignment: .topLeading) {
-                    gridLines
-                    GeometryReader { geo in
-                        let width = geo.size.width - labelWidth - 28
-                        ForEach(bookings) { booking in
-                            block(for: booking, width: width)
+        GeometryReader { outer in
+            ScrollViewReader { proxy in
+                ScrollView {
+                    ZStack(alignment: .topLeading) {
+                        scrollAnchors
+                        gridLines
+                        GeometryReader { geo in
+                            let width = geo.size.width - labelWidth - 28
+                            ForEach(bookings) { booking in
+                                block(for: booking, width: width)
+                            }
+                            nowLine(width: width)
                         }
-                        nowLine(width: width)
                     }
+                    .frame(height: hourHeight * 24 + topInset * 2)
                 }
-                .frame(height: hourHeight * 24 + topInset * 2)
+                .onAppear {
+                    viewportHeight = outer.size.height
+                    DispatchQueue.main.async { scroll(proxy, to: defaultHour(), animated: false) }
+                }
+                .onChange(of: outer.size.height) { viewportHeight = $0 }
+                .onChange(of: day) { _ in scroll(proxy, to: defaultHour(), animated: true) }
+                .onReceive(idleCheck) { _ in autoScrollIfIdle(proxy) }
             }
-            .onAppear { scroll(proxy, animated: false) }
-            .onChange(of: day) { _ in scroll(proxy, animated: true) }
         }
         .confirmationDialog(deleteTitle, isPresented: Binding(get: { pendingDelete != nil },
                                                               set: { if !$0 { pendingDelete = nil } }),
@@ -106,6 +129,42 @@ struct TimelineGrid: View {
             }
             Button("Keep It", role: .cancel) {}
         }
+    }
+
+    /// Invisible markers one per hour, sitting a little above each hour line so
+    /// scrolling to them leaves room for the hour label.
+    private var scrollAnchors: some View {
+        VStack(spacing: 0) {
+            ForEach(0..<24) { hour in
+                Color.clear.frame(height: hourHeight).id(hour)
+            }
+        }
+    }
+
+    /// Before 8 AM today, show the start of the day; otherwise 8 AM, unless
+    /// this day has a booking earlier than that.
+    private func defaultHour() -> Int {
+        if Calendar.current.isDateInToday(day) {
+            return Calendar.current.component(.hour, from: Date()) < Self.dayStartHour ? 0 : Self.dayStartHour
+        }
+        let firstHour = bookings.first(where: { $0.start >= day })
+            .map { Calendar.current.component(.hour, from: $0.start) } ?? Self.dayStartHour
+        return min(firstHour, Self.dayStartHour)
+    }
+
+    /// Once nobody has touched the iPad for five minutes, scroll back to the
+    /// default position. Runs again whenever the default changes (e.g. the
+    /// clock reaching 8 AM) or someone has used it since.
+    private func autoScrollIfIdle(_ proxy: ScrollViewProxy) {
+        if idle.lastInteraction != lastSeenInteraction {
+            lastSeenInteraction = idle.lastInteraction
+            autoScrolledTo = nil
+        }
+        guard idle.isIdle else { return }
+        let target = defaultHour()
+        guard autoScrolledTo != target else { return }
+        autoScrolledTo = target
+        scroll(proxy, to: target, animated: true)
     }
 
     private var deleteTitle: String {
@@ -134,7 +193,6 @@ struct TimelineGrid: View {
                 }
                 .frame(height: hourHeight)
                 .padding(.trailing, 18)
-                .id(hour)
             }
         }
         .padding(.top, topInset)
@@ -149,18 +207,18 @@ struct TimelineGrid: View {
         // Clip to this day so slots that cross midnight show on both days.
         let top = max(y(for: booking.start), topInset)
         let bottom = min(y(for: booking.end), topInset + hourHeight * 24)
-        let height = max(bottom - top - 3, 22)
-        let compact = height < 40
+        let height = max(bottom - top - 3, 16)
+        let compact = height < 34
 
         return Button {
             pendingDelete = booking
         } label: {
             HStack {
                 Text(booking.person.name)
-                    .font(.system(size: compact ? 16 : 19, weight: .bold, design: .rounded))
+                    .font(.system(size: compact ? 14 : 18, weight: .bold, design: .rounded))
                 Spacer()
                 Text(booking.timeRange)
-                    .font(.system(size: compact ? 14 : 16, weight: .medium))
+                    .font(.system(size: compact ? 13 : 16, weight: .medium))
                     .monospacedDigit()
             }
             .foregroundColor(.white)
@@ -189,19 +247,11 @@ struct TimelineGrid: View {
         }
     }
 
-    /// Scroll to the current time today, otherwise the first booking (or 7am).
-    private func scroll(_ proxy: ScrollViewProxy, animated: Bool) {
-        var hour = 7
-        if Calendar.current.isDateInToday(day) {
-            hour = Calendar.current.component(.hour, from: Date())
-        } else if let first = bookings.first(where: { $0.start >= day }) {
-            hour = Calendar.current.component(.hour, from: first.start)
-        }
-        let target = max(hour - 1, 0)
+    private func scroll(_ proxy: ScrollViewProxy, to hour: Int, animated: Bool) {
         if animated {
-            withAnimation { proxy.scrollTo(target, anchor: .top) }
+            withAnimation(.easeInOut(duration: 0.6)) { proxy.scrollTo(hour, anchor: .top) }
         } else {
-            proxy.scrollTo(target, anchor: .top)
+            proxy.scrollTo(hour, anchor: .top)
         }
     }
 
