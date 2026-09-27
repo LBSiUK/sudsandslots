@@ -1,7 +1,29 @@
 import SwiftUI
 
-enum BarAction {
-    case start, finish, cancel
+enum BarAction: Equatable {
+    /// `minutesAgo` > 0 logs a load that was put on earlier without pressing Start.
+    case start(minutesAgo: Int)
+    case finish, cancel
+    case extend(minutes: Int)
+}
+
+/// "Started earlier" choices, up to the 4-hour limit.
+let backdateOptions = [15, 30, 45, 60, 90, 120, 180, 240]
+
+func agoLabel(_ minutes: Int) -> String {
+    switch minutes {
+    case ..<60: return "\(minutes) min ago"
+    case 60: return "1 hour ago"
+    case 90: return "1½ hours ago"
+    default: return "\(minutes / 60) hours ago"
+    }
+}
+
+/// The choices offered under Extend.
+let extendOptions = [15, 30, 60]
+
+func extendLabel(_ minutes: Int) -> String {
+    minutes < 60 ? "\(minutes) min" : minutes == 60 ? "1 hour" : "\(minutes / 60) h \(minutes % 60) min"
 }
 
 /// A session action waiting for confirmation.
@@ -14,25 +36,37 @@ struct PendingBarAction {
         case .start: return "Start"
         case .finish: return "Finish"
         case .cancel: return "Cancel Booking"
+        case .extend: return "Extend"
         }
     }
 
     var question: String {
         let whose = "\(booking.person.name)'s \(booking.machine.name.lowercased())"
         switch action {
+        case .start(let ago) where ago > 0: return "log \(whose) session as started \(agoLabel(ago))"
         case .start: return "start \(whose) session"
         case .finish: return "mark \(whose) session as finished"
         case .cancel: return "cancel \(whose) booking"
+        case .extend(let minutes): return "extend \(whose) session by \(extendLabel(minutes))"
         }
     }
 
-    var detail: String {
+    /// `moves` are the sessions an extension would push later (empty otherwise).
+    func detail(moves: [SessionMove]) -> String {
         switch action {
         case .finish:
             let elapsed = Date().timeIntervalSince(booking.startedAt ?? Date())
             return "Running for \(BookingBar.clock(elapsed)) · \(booking.timeRange)"
+        case .start(let ago) where ago > 0:
+            let at = Date().addingTimeInterval(TimeInterval(-ago * 60))
+            return "Started at \(Booking.timeFormatter.string(from: at)) · booked \(booking.timeRange)"
         case .start, .cancel:
             return booking.timeRange
+        case .extend(let minutes):
+            let newEnd = booking.end.addingTimeInterval(TimeInterval(minutes * 60))
+            var lines = ["Ends at \(Booking.timeFormatter.string(from: newEnd)) instead."]
+            lines += moves.map { "\($0.booking.person.name)'s slot moves to \($0.newTimeRange) and they'll be told." }
+            return lines.joined(separator: "\n")
         }
     }
 }
@@ -40,17 +74,24 @@ struct PendingBarAction {
 extension Confirmer {
     /// Ask "Are you sure…" for a Start / Finish / Cancel choice, then do it.
     func ask(_ pending: PendingBarAction, store: BookingStore) {
-        ask(pending.question, detail: pending.detail, confirmTitle: pending.buttonTitle,
+        var moves: [SessionMove] = []
+        if case .extend(let minutes) = pending.action {
+            moves = store.extensionPlan(for: pending.booking, by: minutes)
+        }
+        ask(pending.question, detail: pending.detail(moves: moves), confirmTitle: pending.buttonTitle,
             destructive: pending.action == .cancel) {
             switch pending.action {
-            case .start:
+            case .start(let ago):
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                store.start(pending.booking)
+                store.start(pending.booking, at: Date().addingTimeInterval(TimeInterval(-ago * 60)))
             case .finish:
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
                 store.finish(pending.booking)
             case .cancel:
                 withAnimation { store.remove(pending.booking) }
+            case .extend(let minutes):
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                withAnimation { store.extend(pending.booking, by: minutes) }
             }
         }
     }
@@ -65,10 +106,24 @@ struct SessionMenuItems: View {
 
     var body: some View {
         if booking.canStart {
-            Button { ask(.start) } label: { Label("Start", systemImage: "play.fill") }
+            Menu {
+                Button { ask(.start(minutesAgo: 0)) } label: { Label("Now", systemImage: "play.fill") }
+                Section("Already running? Started…") {
+                    ForEach(backdateOptions, id: \.self) { minutes in
+                        Button("\(agoLabel(minutes)) (\(Self.clockTime(minutesAgo: minutes)))") {
+                            ask(.start(minutesAgo: minutes))
+                        }
+                    }
+                }
+            } label: {
+                Label("Start", systemImage: "play.fill")
+            }
         }
         if booking.isRunning {
             Button { ask(.finish) } label: { Label("Finished", systemImage: "stop.fill") }
+        }
+        if booking.finishedAt == nil {
+            ExtendMenu(booking: booking)
         }
         Button(role: .destructive) { ask(.cancel) } label: {
             Label("Cancel Booking", systemImage: "xmark")
@@ -78,9 +133,35 @@ struct SessionMenuItems: View {
     private func ask(_ action: BarAction) {
         confirmer.ask(PendingBarAction(action: action, booking: booking), store: store)
     }
+
+    static func clockTime(minutesAgo: Int) -> String {
+        Booking.timeFormatter.string(from: Date().addingTimeInterval(TimeInterval(-minutesAgo * 60)))
+    }
 }
 
-/// One booking on the timeline. Tapping anywhere on it opens the session menu.
+/// "Extend" with its +15 / +30 / +1 hour choices. Later bookings that would
+/// overlap get pushed back; the confirmation says who.
+struct ExtendMenu: View {
+    @EnvironmentObject var store: BookingStore
+    @EnvironmentObject var confirmer: Confirmer
+    let booking: Booking
+    var title = "Extend"
+
+    var body: some View {
+        Menu {
+            ForEach(extendOptions, id: \.self) { minutes in
+                Button("+ \(extendLabel(minutes))") {
+                    confirmer.ask(PendingBarAction(action: .extend(minutes: minutes), booking: booking), store: store)
+                }
+            }
+        } label: {
+            Label(title, systemImage: "clock.arrow.circlepath")
+        }
+    }
+}
+
+/// One booking on the timeline. The ⋯ button opens the session menu; only
+/// that button is the menu, so the bar itself stays put while it's open.
 ///   [status] Name  time range ……… (…)
 struct BookingBar: View {
     let booking: Booking
@@ -93,14 +174,7 @@ struct BookingBar: View {
     /// Tall enough to put the time range on its own line.
     private var twoLine: Bool { height >= 48 }
 
-    var body: some View {
-        Menu {
-            SessionMenuItems(booking: booking)
-        } label: {
-            bar
-        }
-        .accessibilityLabel("Adjust \(booking.person.name)'s session")
-    }
+    var body: some View { bar }
 
     private var bar: some View {
         HStack(spacing: 6) {
@@ -120,12 +194,21 @@ struct BookingBar: View {
             }
             .lineLimit(1)
             Spacer(minLength: 2)
-            Image(systemName: "ellipsis.circle.fill")
-                .font(.system(size: compact ? 16 : 20))
-                .opacity(0.9)
+            Menu {
+                SessionMenuItems(booking: booking)
+            } label: {
+                Image(systemName: "ellipsis.circle.fill")
+                    .font(.system(size: compact ? 16 : 20))
+                    .foregroundColor(.white)
+                    .opacity(0.9)
+                    // Generous tap area without making the bar any taller.
+                    .frame(width: 44, height: height)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("Adjust \(booking.person.name)'s session")
         }
         .foregroundColor(.white.opacity(isDone ? 0.55 : 1))
-        .padding(.horizontal, compact ? 8 : 10)
+        .padding(.leading, compact ? 8 : 10)
         .frame(width: width, height: height)
         .background(isDone ? Self.doneGrey : booking.person.color,
                     in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -141,7 +224,6 @@ struct BookingBar: View {
         }
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.white.opacity(isDone ? 0.12 : 0.25)))
         .shadow(color: .black.opacity(isDone ? 0 : 0.3), radius: 6, y: 3)
-        .contentShape(Rectangle())
     }
 
     private var timeText: some View {

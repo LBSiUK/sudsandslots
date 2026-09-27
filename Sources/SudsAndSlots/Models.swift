@@ -43,9 +43,17 @@ struct Booking: Codable, Identifiable, Equatable {
 
     var isRunning: Bool { startedAt != nil && finishedAt == nil }
 
-    /// Only today's bookings that haven't ended yet can be started.
+    /// How far back a Start can be logged, for loads that went on without
+    /// anyone pressing Start at the time.
+    static let maxBackdate: TimeInterval = 4 * 3600
+
+    /// Today's bookings can be started, and so can one whose slot has begun,
+    /// until 4 hours after it ended (to log a load that was never started).
     var canStart: Bool {
-        startedAt == nil && Calendar.current.isDateInToday(start) && Date() < end
+        let now = Date()
+        return startedAt == nil
+            && (Calendar.current.isDateInToday(start) || start <= now)
+            && now < end.addingTimeInterval(Booking.maxBackdate)
     }
 
     func overlaps(start otherStart: Date, end otherEnd: Date) -> Bool {
@@ -98,9 +106,39 @@ enum BookingError: LocalizedError {
     }
 }
 
+/// A later booking that has to shift because an earlier session was extended.
+struct SessionMove {
+    /// The booking as it was before moving.
+    let booking: Booking
+    let newStart: Date
+
+    var newEnd: Date { newStart.addingTimeInterval(TimeInterval(booking.minutes * 60)) }
+    var newTimeRange: String {
+        "\(Booking.timeFormatter.string(from: newStart)) – \(Booking.timeFormatter.string(from: newEnd))"
+    }
+}
+
+/// Told whenever an extension pushes other people's sessions later, so they
+/// can be notified. Swap in the backend implementation once it exists.
+protocol SessionMoveNotifier {
+    func sessionsMoved(_ moves: [SessionMove], by extended: Booking)
+}
+
+/// Stand-in until the backend is ready: just logs the moves.
+struct LogSessionMoveNotifier: SessionMoveNotifier {
+    func sessionsMoved(_ moves: [SessionMove], by extended: Booking) {
+        for move in moves {
+            print("[moves] \(move.booking.person.name)'s \(move.booking.machine.rawValue) slot",
+                  "\(move.booking.timeRange) → \(move.newTimeRange)",
+                  "(pushed by \(extended.person.name)'s extension)")
+        }
+    }
+}
+
 /// Holds every booking and persists them as JSON in UserDefaults.
 final class BookingStore: ObservableObject {
     @Published private(set) var bookings: [Booking] = []
+    var moveNotifier: SessionMoveNotifier = LogSessionMoveNotifier()
 
     private let key = "bookings.v1"
 
@@ -194,12 +232,42 @@ final class BookingStore: ObservableObject {
         save()
     }
 
-    func start(_ booking: Booking) {
-        update(booking) { $0.startedAt = Date(); $0.finishedAt = nil }
+    /// `at` can be in the past (up to 4 hours) when logging a load late.
+    func start(_ booking: Booking, at date: Date = Date()) {
+        let earliest = Date().addingTimeInterval(-Booking.maxBackdate)
+        update(booking) { $0.startedAt = max(date, earliest); $0.finishedAt = nil }
     }
 
     func finish(_ booking: Booking) {
         update(booking) { $0.finishedAt = Date() }
+    }
+
+    /// Which later bookings on the same machine would have to move if this
+    /// session ran `minutes` longer. Each is pushed to start when the one before
+    /// it now ends, keeping its length, until the chain no longer overlaps.
+    func extensionPlan(for booking: Booking, by minutes: Int) -> [SessionMove] {
+        var end = booking.end.addingTimeInterval(TimeInterval(minutes * 60))
+        var moves: [SessionMove] = []
+        let later = bookings
+            .filter { $0.machine == booking.machine && $0.id != booking.id && $0.start >= booking.start }
+            .sorted { $0.start < $1.start }
+        for next in later {
+            guard next.start < end else { break }
+            let move = SessionMove(booking: next, newStart: end)
+            moves.append(move)
+            end = move.newEnd
+        }
+        return moves
+    }
+
+    func extend(_ booking: Booking, by minutes: Int) {
+        let moves = extensionPlan(for: booking, by: minutes)
+        update(booking) { $0.minutes += minutes }
+        for move in moves {
+            update(move.booking) { $0.start = move.newStart }
+        }
+        guard let extended = bookings.first(where: { $0.id == booking.id }) else { return }
+        if !moves.isEmpty { moveNotifier.sessionsMoved(moves, by: extended) }
     }
 
     private func update(_ booking: Booking, _ change: (inout Booking) -> Void) {

@@ -6,6 +6,7 @@ import SwiftUI
 struct StatusPanel: View {
     @EnvironmentObject var store: BookingStore
     @EnvironmentObject var form: BookingForm
+    @EnvironmentObject var confirmer: Confirmer
     @State private var showingBooking = false
     /// Refreshed every 15 s for "who's next" and "in 5 min". The per-second
     /// timers tick on their own, so an open menu isn't rebuilt every second.
@@ -105,19 +106,40 @@ struct StatusPanel: View {
         }
     }
 
-    /// Opens the session's Start / Finished / Cancel menu.
+    /// "Adjust this session" (Start / Finished / Extend / Cancel) beside a
+    /// direct "Extend session" menu.
     private func adjustButton(for booking: Booking) -> some View {
-        Menu {
-            SessionMenuItems(booking: booking)
-        } label: {
-            Label("Adjust this session", systemImage: "slider.horizontal.3")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity, minHeight: 46)
-                .background(Color.black.opacity(0.3), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white.opacity(0.7)))
+        HStack(spacing: 10) {
+            Menu {
+                SessionMenuItems(booking: booking)
+            } label: {
+                cardButtonLabel("Adjust this session", systemImage: "slider.horizontal.3")
+            }
+            Menu {
+                ForEach(extendOptions, id: \.self) { minutes in
+                    Button("+ \(extendLabel(minutes))") {
+                        confirmer.ask(PendingBarAction(action: .extend(minutes: minutes), booking: booking), store: store)
+                    }
+                }
+            } label: {
+                cardButtonLabel("Extend", systemImage: "clock.arrow.circlepath")
+            }
+            .frame(maxWidth: 104)
+            .accessibilityLabel("Extend session")
         }
         .padding(.top, 8)
+    }
+
+    private func cardButtonLabel(_ title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.system(size: 15, weight: .semibold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .foregroundColor(.white)
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity, minHeight: 46)
+            .background(Color.black.opacity(0.3), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white.opacity(0.7)))
     }
 
     private func freeUntil(on machine: Machine) -> String {
