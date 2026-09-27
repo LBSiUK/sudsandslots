@@ -17,6 +17,7 @@ struct SudsAndSlotsApp: App {
                 .environmentObject(form)
                 .environmentObject(idle)
                 .environmentObject(confirmer)
+                .confirmationAlert(confirmer)
                 .background(IdleTouchWatcher(monitor: idle))
                 .preferredColorScheme(.dark)
                 #if DEBUG
@@ -73,6 +74,5 @@ struct ContentView: View {
             }
         }
         .background(Theme.background.ignoresSafeArea())
-        .overlay(ConfirmOverlay())
     }
 }

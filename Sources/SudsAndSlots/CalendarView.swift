@@ -217,7 +217,8 @@ struct TimelineGrid: View {
 
         return BookingBar(booking: booking, width: width, height: height) { action in
             let pending = PendingBarAction(action: action, booking: booking)
-            confirmer.ask(pending.message, confirmTitle: pending.buttonTitle) { perform(pending) }
+            confirmer.ask(pending.message, confirmTitle: pending.buttonTitle,
+                          destructive: action == .cancel) { perform(pending) }
         }
         .offset(x: labelWidth + 10, y: top + 1.5)
         .transition(.opacity.combined(with: .scale(scale: 0.95)))
