@@ -1,0 +1,21 @@
+services:
+  api:
+    build: .
+    image: suds-backend
+    container_name: suds-backend
+    restart: unless-stopped
+    ports:
+      # Container always listens on 8080. Override the host side with
+      # SUDS_HOST_PORT (e.g. in backend/.env) if 8080 is taken on this machine.
+      - "${SUDS_HOST_PORT:-8080}:8080"
+    environment:
+      TZ: Europe/London
+      SUDS_TOKEN: ${SUDS_TOKEN:-}
+      NTFY_URL: ${NTFY_URL:-}
+      NTFY_TOPIC_PREFIX: ${NTFY_TOPIC_PREFIX:-suds}
+      WEBHOOK_URL: ${WEBHOOK_URL:-}
+    volumes:
+      - suds-data:/data
+
+volumes:
+  suds-data:

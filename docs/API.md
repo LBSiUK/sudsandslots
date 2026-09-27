@@ -62,6 +62,14 @@ Codes: `no_person`, `nothing_chosen`, `in_past` (all 422), `clash` (409),
 - Start: allowed if not already started, and either the slot starts today (server
   local day, `TZ` env, default Europe/London) or has begun, and now is before
   `end + 4h`. `at` may be in the past; it's clamped to no earlier than now − 4h.
+- Push ("shove along", Quick add): with `"push": true`, each stage may overlap
+  bookings on its machine that have **not started** (startedAt null). Those are
+  moved back, in start order, to begin when the previous one (starting with the
+  new stage) now ends, keeping their length, until nothing overlaps; each moved
+  person gets a `moved` notification ("…because Sam quick-added a wash").
+  An overlap with a booking that has started or finished is still a `clash` 409.
+  Stages are placed first, then pushes are computed per machine; pushes never
+  cross machines. Without `push` (default false) any overlap is a 409 as before.
 - Extend by N minutes: later bookings on the same machine (start ≥ this start)
   that would overlap get pushed to start when the previous one now ends, keeping
   their length, until the chain no longer overlaps. Every moved booking's person
@@ -74,7 +82,8 @@ Codes: `no_person`, `nothing_chosen`, `in_past` (all 422), `clash` (409),
 | `GET /health` | | `200 {"ok": true, "version": <int>}` (no auth) |
 | `GET /api/v1/version` | | `{"version": <int>}` — bumps on every change; cheap to poll |
 | `GET /api/v1/bookings` | | `{"version": <int>, "bookings": [Booking]}` — everything ending within the last 30 days or later |
-| `POST /api/v1/bookings/chain` | `{"person", "start", "stages": [{"machine","minutes"}]}` | `201 {"version", "bookings": [Booking]}` or error |
+| `POST /api/v1/bookings/chain` | `{"person", "start", "stages": [{"machine","minutes"}], "push": false}` | `201 {"version", "bookings": [Booking], "moves": [Move]}` or error |
+| `POST /api/v1/bookings/chain-plan` | same body | `{"moves": [Move]}` or the same error the booking would get — a dry run, used to warn before shoving |
 | `POST /api/v1/bookings/{id}/start` | `{"at": "<iso>"?}` | `{"version", "booking"}` |
 | `POST /api/v1/bookings/{id}/finish` | | `{"version", "booking"}` |
 | `GET /api/v1/bookings/{id}/extend-plan?minutes=N` | | `{"moves": [Move]}` |
