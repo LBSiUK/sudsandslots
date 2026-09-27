@@ -93,6 +93,9 @@ struct QuickAddSheet: View {
         let suggestion = busy || offset == nil ? nextFree : nil
         NavigationView {
             VStack(alignment: .leading, spacing: 16) {
+                if let blocker = blocker(at: base) {
+                    nowBanner(blocker)
+                }
                 section("When?") {
                     HStack(spacing: 8) {
                         ForEach(offsets, id: \.self) { minutes in
@@ -106,6 +109,9 @@ struct QuickAddSheet: View {
                     if let suggestion = suggestion {
                         chip(title: "Next free", subtitle: Self.time(suggestion), selected: offset == nil,
                              highlight: true) { offset = nil }
+                            // Green edge even when not chosen, so it reads as the way out.
+                            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(BookingBar.startGreen, lineWidth: offset == nil ? 0 : 2.5))
                             .frame(maxWidth: 170)
                     }
                     warning(for: current)
@@ -184,6 +190,43 @@ struct QuickAddSheet: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(.red)
         }
+    }
+
+    /// The first unfinished booking in the way if the chosen stages started at
+    /// `start`, checking each stage's machine for its stretch of the chain.
+    private func blocker(at start: Date) -> Booking? {
+        var at = start
+        for (machine, length) in stages {
+            let end = at.addingTimeInterval(TimeInterval(length * 60))
+            if let b = store.bookings
+                .filter({ $0.machine == machine && $0.finishedAt == nil && $0.overlaps(start: at, end: end) })
+                .min(by: { $0.start < $1.start }) {
+                return b
+            }
+            at = end
+        }
+        return nil
+    }
+
+    /// Red banner at the very top when "Now" would clash with someone's cycle.
+    private func nowBanner(_ blocker: Booking) -> some View {
+        let until = Self.time(blocker.end)
+        let green = Text("Next free").bold().foregroundColor(BookingBar.startGreen)
+        let message: Text = blocker.startedAt == nil
+            ? Text("Someone else already has a cycle running until \(until). You can start one now but it will move their cycle, or use ") + green + Text(".")
+            : Text("Someone else already has a cycle running until \(until). It's already in, so it can't be moved: use ") + green + Text(".")
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.octagon.fill")
+                .font(.system(size: 20))
+            message
+                .font(.system(size: 15, weight: .semibold))
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .foregroundColor(.red)
+        .padding(12)
+        .background(Color.red.opacity(0.14), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.red.opacity(0.6)))
     }
 
     /// "Wash now, dry later": a selectable card under the When warning.
