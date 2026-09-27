@@ -1,0 +1,20 @@
+# Xcode project for simulator runs: `xcodegen` then open SudsAndSlots.xcodeproj.
+# The jailbroken-iPad .debs come from ./build.sh instead.
+name: SudsAndSlots
+options:
+  bundleIdPrefix: com.leonb
+  deploymentTarget:
+    iOS: "15.0"
+targets:
+  SudsAndSlots:
+    type: application
+    platform: iOS
+    sources: [Sources/SudsAndSlots]
+    settings:
+      base:
+        INFOPLIST_FILE: packaging/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.leonb.sudsandslots
+        TARGETED_DEVICE_FAMILY: "2"
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGNING_ALLOWED: "NO"
