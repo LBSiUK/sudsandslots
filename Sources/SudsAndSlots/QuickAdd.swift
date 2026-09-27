@@ -40,12 +40,16 @@ struct QuickAddSheet: View {
         return moves.isEmpty ? .free : .shoves(moves)
     }
 
-    /// The earliest 5-minute slot (within a day) where every chosen stage fits
-    /// back to back without moving anyone.
+    /// The earliest 5-minute slot (within two days) where every chosen stage
+    /// fits back to back without moving anyone. Follows the night rule: it
+    /// never suggests 10 PM onwards, jumping to 12:00 PM the next day instead.
     private var nextFree: Date? {
         guard !stages.isEmpty else { return nil }
-        for step in 1...(24 * 12) {
-            let candidate = base.addingTimeInterval(TimeInterval(step * 5 * 60))
+        var candidate = base
+        let limit = base.addingTimeInterval(48 * 3600)
+        while candidate < limit {
+            candidate = candidate.addingTimeInterval(5 * 60)
+            if let later = BookingStore.nightDeferral(candidate, original: base) { candidate = later }
             if case .free = outcome(at: candidate) { return candidate }
         }
         return nil
@@ -101,6 +105,7 @@ struct QuickAddSheet: View {
                 .transition(.move(edge: .top).combined(with: .opacity))
         }
         NavigationView {
+            VStack(spacing: 0) {
             ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 section("When?") {
@@ -114,12 +119,12 @@ struct QuickAddSheet: View {
                         }
                     }
                     if let suggestion = suggestion {
-                        chip(title: "Next free", subtitle: Self.time(suggestion), selected: offset == nil,
+                        chip(title: "Next free", subtitle: Self.dayAndTime(suggestion), selected: offset == nil,
                              highlight: true) { offset = nil }
                             // Green edge even when not chosen, so it reads as the way out.
                             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
                                 .stroke(BookingBar.startGreen, lineWidth: offset == nil ? 0 : 2.5))
-                            .frame(maxWidth: 170)
+                            .frame(maxWidth: 200)
                     }
                     if offsets.contains(where: { minutes in
                         let at = base.addingTimeInterval(TimeInterval(minutes * 60))
@@ -139,24 +144,15 @@ struct QuickAddSheet: View {
                         }
                     }
                 }
-                section("Who? Tap your name to book") {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
-                        ForEach(Person.allCases) { person in
-                            Button { book(for: person) } label: {
-                                Text(person.name)
-                                    .font(.system(size: 21, weight: .bold, design: .rounded))
-                                    .foregroundColor(.white)
-                                    .frame(maxWidth: .infinity, minHeight: 56)
-                                    .background(person.color, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(stages.isEmpty)
-                            .opacity(stages.isEmpty ? 0.4 : 1)
-                        }
-                    }
-                }
             }
             .padding(20)
+            }
+            // The names are the book buttons, so they're pinned below the
+            // scrolling part and always on screen, however much is above.
+            Divider().overlay(Theme.controlStroke)
+            whoSection
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
             }
             .navigationTitle("Quick Add")
             .navigationBarTitleDisplayMode(.inline)
@@ -206,6 +202,26 @@ struct QuickAddSheet: View {
                   systemImage: "xmark.octagon.fill")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(.red)
+        }
+    }
+
+    /// "Who? Tap your name to book": the five names, each one books.
+    private var whoSection: some View {
+        section("Who? Tap your name to book") {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
+                ForEach(Person.allCases) { person in
+                    Button { book(for: person) } label: {
+                        Text(person.name)
+                            .font(.system(size: 21, weight: .bold, design: .rounded))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity, minHeight: 56)
+                            .background(person.color, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(stages.isEmpty)
+                    .opacity(stages.isEmpty ? 0.4 : 1)
+                }
+            }
         }
     }
 
@@ -502,6 +518,13 @@ struct QuickAddSheet: View {
 
     static func time(_ date: Date) -> String {
         Booking.timeFormatter.string(from: date)
+    }
+
+    /// "12:00 PM" today, "Tomorrow 12:00 PM" or "Tue 12:00 PM" otherwise.
+    static func dayAndTime(_ date: Date) -> String {
+        if Calendar.current.isDateInToday(date) { return time(date) }
+        let day = Calendar.current.isDateInTomorrow(date) ? "Tomorrow" : BookingSheet.weekday.string(from: date)
+        return "\(day) \(time(date))"
     }
 }
 
