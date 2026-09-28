@@ -11,7 +11,11 @@ struct CalendarView: View {
                 .padding(.horizontal, 24)
                 .padding(.vertical, 18)
             Divider().overlay(Theme.panelStroke)
-            TimelineGrid(day: form.day, bookings: store.bookings(on: form.day)) { form.dayOffset += $0 }
+            TimelineGrid(day: form.day, bookings: store.bookings(on: form.day),
+                         neighbours: (store.bookings(on: form.day.addingTimeInterval(-86_400 / 2)),
+                                      store.bookings(on: form.day.addingTimeInterval(86_400 * 1.5)))) {
+                form.dayOffset += $0
+            }
         }
     }
 
@@ -75,16 +79,20 @@ struct TimelineGrid: View {
     @EnvironmentObject var idle: IdleMonitor
     let day: Date
     let bookings: [Booking]
+    /// The day before's and the day after's bookings, peeked at past either end.
+    var neighbours: (previous: [Booking], next: [Booking]) = ([], [])
     /// Pull past midnight at either end: +1 = next day, -1 = previous day.
     var changeDay: (Int) -> Void = { _ in }
 
     /// How far past the top (+) or bottom (−) of the day the list is pulled.
     @State private var pull: CGFloat = 0
-    /// Set once pulled past the threshold; acted on when the finger lifts.
-    @State private var armed: Int?
-    /// Where to land after a pull changes the day (0 = midnight, 23 = 11 PM).
-    @State private var landOn: Int?
-    private let pullThreshold: CGFloat = 80
+    /// Set while a pull changes the day: the scroll view places itself, so
+    /// the usual scroll-to-morning on a day change is skipped.
+    @State private var snapping = false
+    private let pullThreshold: CGFloat = 90
+    /// Hours of the neighbouring day drawn past midnight at either end.
+    private let peekHours = 4
+    private var peekHeight: CGFloat { hourHeight * CGFloat(peekHours) }
 
     @State private var viewportHeight: CGFloat = 0
     /// Hour last scrolled to automatically; cleared by any touch so the next
@@ -171,10 +179,16 @@ struct TimelineGrid: View {
                             ForEach(bookings) { booking in
                                 block(for: booking, columns: cols)
                             }
+                            // Just outside the content, so only seen when pulled
+                            // past either end.
+                            peek(direction: -1, columns: cols, width: geo.size.width)
+                                .offset(y: -peekHeight)
+                            peek(direction: 1, columns: cols, width: geo.size.width)
+                                .offset(y: geo.size.height)
                         }
                     }
                     .frame(height: hourHeight * 24 + topInset * 2)
-                    .background(ScrollPullWatcher(onPull: pulled, onRelease: released))
+                    .background(ScrollPullWatcher(threshold: pullThreshold, midnightInset: topInset, onPull: { pull = $0 }, onSnap: snapped))
                 }
                 .overlay(alignment: .top) { pullHint(direction: -1) }
                 .overlay(alignment: .bottom) { pullHint(direction: 1) }
@@ -185,9 +199,8 @@ struct TimelineGrid: View {
                 .onChange(of: outer.size.height) { viewportHeight = $0 }
                 .onChange(of: day) { _ in
                     // Pulled past midnight: carry on from the edge you came through.
-                    if let edge = landOn {
-                        landOn = nil
-                        scroll(proxy, to: edge, animated: false)
+                    if snapping {
+                        snapping = false
                     } else {
                         scroll(proxy, to: defaultHour(), animated: true)
                     }
@@ -197,30 +210,80 @@ struct TimelineGrid: View {
         }
     }
 
-    /// Tracks overscroll at either end while the finger is down (+ = past
-    /// the top, − = past the bottom). Past the threshold it arms, with a tap
-    /// of haptics; easing back off disarms it.
-    private func pulled(_ distance: CGFloat) {
-        pull = distance
-        let direction = distance > 0 ? -1 : 1
-        if abs(distance) >= pullThreshold {
-            if armed != direction {
-                armed = direction
-                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            }
-        } else if armed != nil, abs(distance) < pullThreshold * 0.6 {
-            armed = nil
-        }
+    /// Pulled past the threshold: change day there and then. The scroll view
+    /// keeps what was on screen in place and eases into the new day.
+    private func snapped(_ direction: Int) {
+        pull = 0
+        snapping = true
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        changeDay(direction)
     }
 
-    /// The finger lifted: change day if it let go while armed.
-    private func released(_ distance: CGFloat) {
-        pull = 0
-        defer { armed = nil }
-        guard abs(distance) >= pullThreshold * 0.6, let direction = armed else { return }
-        landOn = direction > 0 ? 0 : 23
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
-        changeDay(direction)
+    static func dayName(_ date: Date) -> String {
+        Calendar.current.isDateInToday(date) ? "Today"
+            : Calendar.current.isDateInTomorrow(date) ? "Tomorrow"
+            : Calendar.current.isDateInYesterday(date) ? "Yesterday"
+            : CalendarView.weekday.string(from: date)
+    }
+
+    /// The last (−1) or first (+1) few hours of the neighbouring day, drawn
+    /// just outside this one so pulling past midnight shows what's there.
+    private func peek(direction: Int, columns cols: Columns, width: CGFloat) -> some View {
+        let other = Calendar.current.date(byAdding: .day, value: direction, to: day)!
+        let firstHour = direction < 0 ? 24 - peekHours : 0
+        let from = Calendar.current.date(byAdding: .hour, value: firstHour, to: other)!
+        let to = from.addingTimeInterval(TimeInterval(peekHours * 3600))
+        let py = { (date: Date) in CGFloat(date.timeIntervalSince(from) / 3600) * hourHeight }
+        let shown = (direction < 0 ? neighbours.previous : neighbours.next)
+            .filter { $0.start < to && $0.end > from }
+        return ZStack(alignment: .topLeading) {
+            ForEach(0..<peekHours, id: \.self) { i in
+                HStack(alignment: .top, spacing: 10) {
+                    Text(Self.hourLabel(firstHour + i))
+                        .font(.system(size: 14, weight: .medium))
+                        .monospacedDigit()
+                        .foregroundColor(Theme.secondaryText)
+                        .frame(width: labelWidth, alignment: .trailing)
+                        .offset(y: -9)
+                    Rectangle().fill(Color.white.opacity(0.13)).frame(height: 1)
+                }
+                .padding(.trailing, 18)
+                .offset(y: CGFloat(i) * hourHeight)
+            }
+            ForEach(shown) { booking in
+                let top = max(py(booking.start), 0)
+                let bottom = min(py(booking.end), peekHeight)
+                let height = max(bottom - top - 3, 10)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(booking.person.color.opacity(booking.finishedAt == nil ? 0.75 : 0.35))
+                    .overlay(alignment: .topLeading) {
+                        if height >= 28 {
+                            Text("\(booking.person.name)  \(booking.shortTimeRange)")
+                                .font(.system(size: 14, weight: .bold))
+                                .lineLimit(1)
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.top, 6)
+                        }
+                    }
+                    .frame(width: cols.width, height: height)
+                    .offset(x: cols.x(for: booking.machine), y: top + 1.5)
+            }
+            // Which day this is, at the midnight it joins on.
+            Label(Self.dayName(other), systemImage: direction < 0 ? "arrow.up" : "arrow.down")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundColor(.black)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Color.white, in: Capsule())
+                .offset(x: cols.x + cols.all - 110, y: direction < 0 ? peekHeight - 30 : 6)
+        }
+        .frame(width: width, height: peekHeight, alignment: .topLeading)
+        .overlay(alignment: direction < 0 ? .bottom : .top) {
+            Rectangle().fill(Color.white.opacity(0.5)).frame(height: 2)
+        }
+        .opacity(0.85)
+        .allowsHitTesting(false)
     }
 
     /// "Pull for Monday" / "Release for Monday", shown while pulling.
@@ -228,14 +291,8 @@ struct TimelineGrid: View {
     private func pullHint(direction: Int) -> some View {
         let distance = direction < 0 ? max(pull, 0) : max(-pull, 0)
         if distance > 8 {
-            let target = Calendar.current.date(byAdding: .day, value: direction, to: day)!
-            let name = Calendar.current.isDateInToday(target) ? "Today"
-                : Calendar.current.isDateInTomorrow(target) ? "Tomorrow"
-                : Calendar.current.isDateInYesterday(target) ? "Yesterday"
-                : CalendarView.weekday.string(from: target)
-            let ready = armed == direction
-            Label(ready ? "Release for \(name)"
-                        : "Drag a little harder to go to the \(direction < 0 ? "previous" : "next") day",
+            let ready = distance >= pullThreshold * 0.8
+            Label("Drag a little harder to go to the \(direction < 0 ? "previous" : "next") day",
                   systemImage: direction < 0 ? "arrow.down.circle.fill" : "arrow.up.circle.fill")
                 .font(.system(size: 15, weight: .bold))
                 .foregroundColor(ready ? .black : .white)
@@ -375,22 +432,32 @@ struct DashedLine: Shape {
 /// far it is dragged past either end, and the moment the finger lets go.
 /// (SwiftUI on iOS 15 has no way to see overscroll or the end of a drag.)
 private struct ScrollPullWatcher: UIViewRepresentable {
+    let threshold: CGFloat
+    /// Space between the content's edges and its midnight lines.
+    let midnightInset: CGFloat
     let onPull: (CGFloat) -> Void
-    let onRelease: (CGFloat) -> Void
+    /// −1 = previous day, +1 = next day.
+    let onSnap: (Int) -> Void
 
     func makeUIView(context: Context) -> WatcherView { WatcherView() }
 
     func updateUIView(_ view: WatcherView, context: Context) {
+        view.threshold = threshold
+        view.midnightInset = midnightInset
         view.onPull = onPull
-        view.onRelease = onRelease
+        view.onSnap = onSnap
     }
 
     final class WatcherView: UIView {
+        var threshold: CGFloat = 90
+        var midnightInset: CGFloat = 0
         var onPull: (CGFloat) -> Void = { _ in }
-        var onRelease: (CGFloat) -> Void = { _ in }
+        var onSnap: (Int) -> Void = { _ in }
         private weak var scrollView: UIScrollView?
         private var observation: NSKeyValueObservation?
         private var lastReported: CGFloat = 0
+        /// One day change per drag.
+        private var snapped = false
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
@@ -405,30 +472,70 @@ private struct ScrollPullWatcher: UIViewRepresentable {
             observation = found.observe(\.contentOffset) { [weak self] _, _ in self?.offsetChanged() }
         }
 
+        private var minOffset: CGFloat { -(scrollView?.adjustedContentInset.top ?? 0) }
+
+        private var maxOffset: CGFloat {
+            guard let s = scrollView else { return 0 }
+            return max(s.contentSize.height + s.adjustedContentInset.bottom - s.bounds.height, minOffset)
+        }
+
         /// + past the top, − past the bottom, 0 in between.
         private var overscroll: CGFloat {
             guard let s = scrollView else { return 0 }
-            let top = -(s.contentOffset.y + s.adjustedContentInset.top)
+            let top = minOffset - s.contentOffset.y
             if top > 0 { return top }
-            let maxY = s.contentSize.height + s.adjustedContentInset.bottom - s.bounds.height
-            let bottom = s.contentOffset.y - max(maxY, -s.adjustedContentInset.top)
+            let bottom = s.contentOffset.y - maxOffset
             return bottom > 0 ? -bottom : 0
         }
 
         private func offsetChanged() {
-            guard let s = scrollView, s.isTracking else { return }
+            guard let s = scrollView, s.isTracking, !snapped else { return }
             let now = overscroll
             guard now != lastReported else { return }
             lastReported = now
             onPull(now)
+            if abs(now) >= threshold { snap(now) }
+        }
+
+        /// Swap to the neighbouring day without anything jumping: the new
+        /// day's midnight lands where the peeked one was, then eases in.
+        private func snap(_ distance: CGFloat) {
+            guard let s = scrollView else { return }
+            snapped = true
+            lastReported = 0
+            // End the drag here; the finger has done its job.
+            s.panGestureRecognizer.isEnabled = false
+            s.panGestureRecognizer.isEnabled = true
+            let direction = distance > 0 ? -1 : 1
+            let height = s.bounds.height
+            let start: CGFloat, end: CGFloat
+            if direction < 0 {
+                // The peeked day's midnight sat `distance` down the screen
+                // (the peeks butt onto the content's edges, not its midnight
+                // lines); the new day's last midnight goes there instead.
+                start = maxOffset + height - distance - midnightInset
+                end = maxOffset
+            } else {
+                start = minOffset - height - distance + midnightInset
+                end = minOffset
+            }
+            onSnap(direction)
+            DispatchQueue.main.async {
+                s.setContentOffset(CGPoint(x: 0, y: start), animated: false)
+                UIView.animate(withDuration: 0.45, delay: 0, usingSpringWithDamping: 0.9,
+                               initialSpringVelocity: 0.4, options: [.allowUserInteraction]) {
+                    s.contentOffset = CGPoint(x: 0, y: end)
+                }
+            }
         }
 
         @objc private func panned(_ pan: UIPanGestureRecognizer) {
             switch pan.state {
+            case .began:
+                snapped = false
             case .ended, .cancelled, .failed:
-                let final = overscroll
                 lastReported = 0
-                onRelease(final)
+                onPull(0)
             default: break
             }
         }
