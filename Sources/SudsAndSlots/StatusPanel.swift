@@ -211,7 +211,7 @@ struct StatusPanel: View {
             }
             if booking.startedAt == nil && booking.finishedAt == nil {
                 Menu { MoveAlongItems(booking: booking) } label: {
-                    actionTile("Reschedule", systemImage: "calendar.badge.clock", fill: BookingBar.finishRed)
+                    actionTile("Reschedule", systemImage: "calendar.badge.clock", fill: .orange)
                 }
             }
             Button { ask(.cancel, booking) } label: {
@@ -236,7 +236,8 @@ struct StatusPanel: View {
             Text(title)
                 .font(.system(size: 12, weight: .semibold))
                 .lineLimit(1)
-                .minimumScaleFactor(0.75)
+                .minimumScaleFactor(0.6)
+                .padding(.horizontal, 4)
         }
         .foregroundColor(.white)
         .frame(maxWidth: .infinity, minHeight: 50)

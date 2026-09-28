@@ -174,13 +174,8 @@ struct TimelineGrid: View {
                         }
                     }
                     .frame(height: hourHeight * 24 + topInset * 2)
-                    .background(GeometryReader { g in
-                        Color.clear.preference(key: TimelineOffsetKey.self,
-                                               value: g.frame(in: .named("timeline")).minY)
-                    })
+                    .background(ScrollPullWatcher(onPull: pulled, onRelease: released))
                 }
-                .coordinateSpace(name: "timeline")
-                .onPreferenceChange(TimelineOffsetKey.self) { pulled(topOffset: $0) }
                 .overlay(alignment: .top) { pullHint(direction: -1) }
                 .overlay(alignment: .bottom) { pullHint(direction: 1) }
                 .onAppear {
@@ -202,29 +197,30 @@ struct TimelineGrid: View {
         }
     }
 
-    /// Tracks overscroll at either end. Past the threshold it arms (with a
-    /// tap of haptics); letting go while armed changes the day; easing back
-    /// off before letting go cancels it.
-    private func pulled(topOffset: CGFloat) {
-        let content = hourHeight * 24 + topInset * 2
-        let top = max(topOffset, 0)
-        let bottom = max(viewportHeight - (content + topOffset), 0)
-        pull = top > 0 ? top : -bottom
-        let direction = top > 0 ? -1 : (bottom > 0 ? 1 : 0)
-        let distance = max(top, bottom)
-        if distance >= pullThreshold, armed == nil, idle.isTouching {
-            armed = direction
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        } else if let armedDirection = armed {
-            if !idle.isTouching {
-                armed = nil
-                landOn = armedDirection > 0 ? 0 : 23
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
-                changeDay(armedDirection)
-            } else if distance < pullThreshold * 0.6 {
-                armed = nil
+    /// Tracks overscroll at either end while the finger is down (+ = past
+    /// the top, − = past the bottom). Past the threshold it arms, with a tap
+    /// of haptics; easing back off disarms it.
+    private func pulled(_ distance: CGFloat) {
+        pull = distance
+        let direction = distance > 0 ? -1 : 1
+        if abs(distance) >= pullThreshold {
+            if armed != direction {
+                armed = direction
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             }
+        } else if armed != nil, abs(distance) < pullThreshold * 0.6 {
+            armed = nil
         }
+    }
+
+    /// The finger lifted: change day if it let go while armed.
+    private func released(_ distance: CGFloat) {
+        pull = 0
+        defer { armed = nil }
+        guard abs(distance) >= pullThreshold * 0.6, let direction = armed else { return }
+        landOn = direction > 0 ? 0 : 23
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        changeDay(direction)
     }
 
     /// "Pull for Monday" / "Release for Monday", shown while pulling.
@@ -375,8 +371,66 @@ struct DashedLine: Shape {
     }
 }
 
-/// The timeline's content offset, for pull-past-midnight.
-private struct TimelineOffsetKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+/// Finds the UIScrollView SwiftUI puts behind the timeline and reports how
+/// far it is dragged past either end, and the moment the finger lets go.
+/// (SwiftUI on iOS 15 has no way to see overscroll or the end of a drag.)
+private struct ScrollPullWatcher: UIViewRepresentable {
+    let onPull: (CGFloat) -> Void
+    let onRelease: (CGFloat) -> Void
+
+    func makeUIView(context: Context) -> WatcherView { WatcherView() }
+
+    func updateUIView(_ view: WatcherView, context: Context) {
+        view.onPull = onPull
+        view.onRelease = onRelease
+    }
+
+    final class WatcherView: UIView {
+        var onPull: (CGFloat) -> Void = { _ in }
+        var onRelease: (CGFloat) -> Void = { _ in }
+        private weak var scrollView: UIScrollView?
+        private var observation: NSKeyValueObservation?
+        private var lastReported: CGFloat = 0
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            isUserInteractionEnabled = false
+            guard window != nil, scrollView == nil else { return }
+            var ancestor = superview
+            while let view = ancestor, !(view is UIScrollView) { ancestor = view.superview }
+            guard let found = ancestor as? UIScrollView else { return }
+            scrollView = found
+            found.alwaysBounceVertical = true
+            found.panGestureRecognizer.addTarget(self, action: #selector(panned(_:)))
+            observation = found.observe(\.contentOffset) { [weak self] _, _ in self?.offsetChanged() }
+        }
+
+        /// + past the top, − past the bottom, 0 in between.
+        private var overscroll: CGFloat {
+            guard let s = scrollView else { return 0 }
+            let top = -(s.contentOffset.y + s.adjustedContentInset.top)
+            if top > 0 { return top }
+            let maxY = s.contentSize.height + s.adjustedContentInset.bottom - s.bounds.height
+            let bottom = s.contentOffset.y - max(maxY, -s.adjustedContentInset.top)
+            return bottom > 0 ? -bottom : 0
+        }
+
+        private func offsetChanged() {
+            guard let s = scrollView, s.isTracking else { return }
+            let now = overscroll
+            guard now != lastReported else { return }
+            lastReported = now
+            onPull(now)
+        }
+
+        @objc private func panned(_ pan: UIPanGestureRecognizer) {
+            switch pan.state {
+            case .ended, .cancelled, .failed:
+                let final = overscroll
+                lastReported = 0
+                onRelease(final)
+            default: break
+            }
+        }
+    }
 }
