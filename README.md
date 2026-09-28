@@ -1,7 +1,10 @@
 # Suds & Slots
 
-Laundry-slot booking app for the household, iPadOS 15 (SwiftUI), built for the
-jailbroken iPad Mini 4 in landscape.
+Laundry-slot booking app for the household, iPadOS 15 (SwiftUI), for jailbroken
+iPads in landscape.
+
+Built for larger iPad (Air 2, 9th gen etc) displays. This may work on an iPad mini
+but support is not guaranteed.
 
 - `./build.sh` → fake-signed Sileo `.deb`s (rootless + rootful) in `build/`
 - `xcodegen` → `SudsAndSlots.xcodeproj` for simulator runs (no iOS 15 simulator on
