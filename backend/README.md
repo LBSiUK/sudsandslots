@@ -27,6 +27,7 @@ you really want to delete every booking).
 ## Settings
 
 Set them in `backend/.env` (or the shell) and run `docker compose up -d` again.
+`cp .env.example .env` gives you a commented starting point with every default.
 
 | Variable | Default | What it does |
 | --- | --- | --- |
