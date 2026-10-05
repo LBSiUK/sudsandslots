@@ -2,7 +2,7 @@ import Foundation
 
 /// Where the laundry server lives, and the shared secret if it wants one.
 struct ServerConfig: Equatable {
-    /// Root of the server, e.g. `http://192.168.0.139:8080` (no `/api/v1`).
+    /// Root of the server, e.g. `http://192.168.0.10:8080` (no `/api/v1`).
     var baseURL: URL
     var token: String?
 
@@ -23,7 +23,7 @@ struct ServerConfig: Equatable {
         return urlText.flatMap { ServerConfig(urlText: $0, token: token) }
     }
 
-    /// Accepts what people type: `192.168.0.139:8080`, `http://host:8080/`,
+    /// Accepts what people type: `192.168.0.10:8080`, `http://host:8080/`,
     /// even a pasted `…/api/v1`.
     init?(urlText: String, token: String?) {
         var text = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
