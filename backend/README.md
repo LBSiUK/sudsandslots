@@ -43,9 +43,9 @@ Inside the container `SUDS_DB` (default `/data/suds.db`) and `SUDS_PING_SECONDS`
 
 ## Point the iPad app at it
 
-1. Find the server machine's LAN address (e.g. `192.168.0.139`).
+1. Find the server machine's LAN address (e.g. `192.168.0.10`).
 2. On the iPad, open the app's Server settings sheet (from the sync status in the side
-   panel), enter `http://192.168.0.139:8080` (plus the token if you set
+   panel), enter `http://192.168.0.10:8080` (plus the token if you set
    `SUDS_TOKEN`), tap **Test Connection**, then **Save**.
 3. The first time, the app uploads its own bookings with `/api/v1/import`; from
    then on the server is the source of truth and every iPad updates live.
