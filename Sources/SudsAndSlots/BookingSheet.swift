@@ -254,6 +254,16 @@ struct TimeStrip: View {
         return now.hour! * 2 + now.minute! / 30
     }
 
+    /// The chip the strip opens on (one before it, so it isn't at the very
+    /// edge): now, unless the chosen time is on another day or more than a
+    /// few hours away (e.g. rescheduling a session tomorrow morning), when
+    /// it opens on the chosen time so it's in view.
+    private var openingSlot: Int {
+        let chosen = selection / 30
+        let nearNow = isToday && chosen < currentSlot + 6
+        return max((nearNow ? currentSlot : chosen) - 1, 0)
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
@@ -266,7 +276,7 @@ struct TimeStrip: View {
             .onAppear {
                 // Again once the sheet has finished presenting; scrolling only
                 // during the animation lands a few chips off.
-                let target = max(currentSlot - 1, 0)
+                let target = openingSlot
                 for delay in [0.0, 0.35, 0.7] {
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                         proxy.scrollTo(target, anchor: .leading)

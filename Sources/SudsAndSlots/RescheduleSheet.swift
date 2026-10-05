@@ -15,8 +15,22 @@ struct RescheduleSheet: View {
     @StateObject private var confirmer = Confirmer()
     let booking: Booking
 
-    @State private var dayOffset = 0
-    @State private var startMinutes = 0
+    @State private var dayOffset: Int
+    @State private var startMinutes: Int
+
+    /// Starts from where the session is now. Set here rather than in onAppear
+    /// so the time strip opens on the right day and time straight away.
+    init(booking: Booking) {
+        self.booking = booking
+        let today = Calendar.current.startOfDay(for: Date())
+        _dayOffset = State(initialValue: max(0, Calendar.current.dateComponents(
+            [.day], from: today, to: Calendar.current.startOfDay(for: booking.start)).day ?? 0))
+        let parts = Calendar.current.dateComponents([.hour, .minute], from: booking.start)
+        // The time row is half-hourly: round up to the next one (a 9:55
+        // slot opens on 10:00, not on 9:30, which may have passed).
+        let exact = parts.hour! * 60 + parts.minute!
+        _startMinutes = State(initialValue: min((exact + 29) / 30 * 30, 23 * 60 + 30))
+    }
 
     private var newStart: Date {
         let today = Calendar.current.startOfDay(for: Date())
@@ -92,17 +106,6 @@ struct RescheduleSheet: View {
         }
         .navigationViewStyle(.stack)
         .confirmationAlert(confirmer)
-        .onAppear {
-            // Start from where it is now.
-            let today = Calendar.current.startOfDay(for: Date())
-            dayOffset = max(0, Calendar.current.dateComponents([.day], from: today,
-                                                               to: Calendar.current.startOfDay(for: booking.start)).day ?? 0)
-            let parts = Calendar.current.dateComponents([.hour, .minute], from: booking.start)
-            // The time row is half-hourly: round up to the next one (a 9:55
-            // slot opens on 10:00, not on 9:30, which may have passed).
-            let exact = parts.hour! * 60 + parts.minute!
-            startMinutes = min((exact + 29) / 30 * 30, 23 * 60 + 30)
-        }
     }
 
     /// What the new time would do: free, who moves, or why it can't.
