@@ -9,7 +9,7 @@ services:
       # SUDS_HOST_PORT (e.g. in backend/.env) if 8080 is taken on this machine.
       - "${SUDS_HOST_PORT:-8080}:8080"
     environment:
-      TZ: Europe/London
+      TZ: ${TZ:-Europe/London}
       SUDS_TOKEN: ${SUDS_TOKEN:-}
       NTFY_URL: ${NTFY_URL:-}
       NTFY_TOPIC_PREFIX: ${NTFY_TOPIC_PREFIX:-suds}
