@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build Suds & Slots as a fake-signed iOS 15 app and package it as Sileo .debs
-# (both rootless and rootful) for a jailbroken iPad Mini 4 on iOS 15.8.4.
+# (both rootless and rootful) for jailbroken larger iPads (Air 2, 9th gen).
 set -euo pipefail
 
 cd "$(dirname "$0")"
